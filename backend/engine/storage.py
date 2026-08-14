@@ -108,4 +108,30 @@ class StorageManager:
             json.dump(item, f, indent=2)
         return item
 
+    def delete_history(self, history_id: str) -> bool:
+        """Delete a history entry (and its generated audio file if managed by the app)."""
+        path = os.path.join(HISTORY_DIR, f"{history_id}.json")
+        if not os.path.exists(path):
+            return False
+
+        file_path = ""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                file_path = json.load(f).get("file_path", "")
+        except Exception:
+            pass
+
+        os.remove(path)
+
+        # Best-effort cleanup of the generated audio file, only within app-managed dirs
+        if file_path:
+            real = os.path.realpath(file_path)
+            allowed = (os.path.realpath(TEMP_DIR), os.path.realpath(EXPORTS_DIR))
+            if any(real == a or real.startswith(a + os.sep) for a in allowed):
+                try:
+                    os.remove(real)
+                except Exception:
+                    pass
+        return True
+
 storage_manager = StorageManager()

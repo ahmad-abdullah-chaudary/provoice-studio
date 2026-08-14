@@ -113,7 +113,6 @@ export const QueueView: React.FC = () => {
     try {
       if (isAll) {
         await fetch('/api/queue/clear-all', { method: 'POST' });
-        await fetch('/api/queue/clear-all', { method: 'DELETE' });
       } else {
         await fetch('/api/queue/bulk-delete', {
           method: 'POST',

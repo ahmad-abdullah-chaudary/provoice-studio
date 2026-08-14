@@ -193,7 +193,157 @@ class VideoSyncEngine:
         except Exception as exc:
             return False, str(exc)
 
+    @staticmethod
+    def parse_timestamp_to_seconds(ts_str: str) -> float:
+        """Parse timestamp formats (hh:mm:ss:ms, hh:mm:ss.ms, mm:ss, ss) to seconds."""
+        s = ts_str.strip().replace(",", ".")
+        if not s:
+            return 0.0
+        parts = s.split(":")
+        try:
+            if len(parts) == 4:
+                # e.g. 0:0:1:45 -> H:M:S:MS
+                h = float(parts[0])
+                m = float(parts[1])
+                sec = float(parts[2])
+                ms_val = float(parts[3])
+                ms = ms_val / 100.0 if len(parts[3]) <= 2 else ms_val / 1000.0
+                return h * 3600 + m * 60 + sec + ms
+            elif len(parts) == 3:
+                # e.g. 01:23:45.500
+                h = float(parts[0])
+                m = float(parts[1])
+                sec = float(parts[2])
+                return h * 3600 + m * 60 + sec
+            elif len(parts) == 2:
+                # e.g. 01:23.500 or 1:30
+                m = float(parts[0])
+                sec = float(parts[1])
+                return m * 60 + sec
+            elif len(parts) == 1:
+                return float(parts[0])
+        except ValueError:
+            pass
+        return 0.0
 
+    @staticmethod
+    def trim_video_batch(
+        video_path: str,
+        ranges: List[Dict[str, Any]],
+        output_dir: str,
+        merge_all: bool = False,
+    ) -> Dict[str, Any]:
+        """Trim video according to a list of timestamp ranges and generate numbered clips."""
+        if not os.path.exists(video_path):
+            return {"success": False, "error": f"Source video not found: {video_path}"}
+
+        os.makedirs(output_dir, exist_ok=True)
+        results = []
+        trimmed_file_paths = []
+        base_name = os.path.splitext(os.path.basename(video_path))[0]
+        timestamp_id = int(time.time())
+
+        for idx, item in enumerate(ranges, start=1):
+            start_sec = float(item.get("start_sec", 0.0))
+            end_sec = float(item.get("end_sec", 0.0))
+            duration = max(0.0, end_sec - start_sec)
+
+            clip_name = f"Clip_{idx}_{base_name}_{timestamp_id}.mp4"
+            clip_path = os.path.join(output_dir, clip_name)
+
+            # Try stream copy first for ultra-fast processing
+            cmd_copy = [
+                "ffmpeg", "-y",
+                "-ss", f"{start_sec:.3f}",
+                "-to", f"{end_sec:.3f}",
+                "-i", video_path,
+                "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
+                clip_path
+            ]
+
+            success = False
+            try:
+                res = subprocess.run(cmd_copy, capture_output=True, timeout=60)
+                if res.returncode == 0 and os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
+                    success = True
+            except Exception:
+                pass
+
+            # Fallback to ultrafast re-encode if copy fails or produces empty clip
+            if not success:
+                cmd_encode = [
+                    "ffmpeg", "-y",
+                    "-ss", f"{start_sec:.3f}",
+                    "-to", f"{end_sec:.3f}",
+                    "-i", video_path,
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+                    "-c:a", "aac", "-b:a", "192k",
+                    clip_path
+                ]
+                try:
+                    res = subprocess.run(cmd_encode, capture_output=True, timeout=120)
+                    if res.returncode == 0 and os.path.exists(clip_path):
+                        success = True
+                except Exception as e:
+                    print(f"[VideoEngine] Trim clip {idx} error: {e}")
+
+            if success and os.path.exists(clip_path):
+                trimmed_file_paths.append(clip_path)
+                results.append({
+                    "clip_number": idx,
+                    "filename": clip_name,
+                    "path": clip_path,
+                    "download_url": f"/api/exports/trimmed/{clip_name}",
+                    "start_sec": start_sec,
+                    "end_sec": end_sec,
+                    "duration": round(duration, 2),
+                    "status": "success"
+                })
+            else:
+                results.append({
+                    "clip_number": idx,
+                    "filename": clip_name,
+                    "start_sec": start_sec,
+                    "end_sec": end_sec,
+                    "duration": round(duration, 2),
+                    "status": "failed",
+                    "error": "FFmpeg trimming failed"
+                })
+
+        combined_url = None
+        if merge_all and len(trimmed_file_paths) > 0:
+            combined_name = f"Merged_Sequence_{base_name}_{timestamp_id}.mp4"
+            combined_path = os.path.join(output_dir, combined_name)
+
+            concat_txt = os.path.join(output_dir, f"concat_{timestamp_id}.txt")
+            with open(concat_txt, "w", encoding="utf-8") as f:
+                for p in trimmed_file_paths:
+                    escaped_p = p.replace("\\", "/")
+                    f.write(f"file '{escaped_p}'\n")
+
+            cmd_concat = [
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", concat_txt, "-c", "copy", combined_path
+            ]
+            try:
+                res = subprocess.run(cmd_concat, capture_output=True, timeout=180)
+                if res.returncode == 0 and os.path.exists(combined_path):
+                    combined_url = f"/api/exports/trimmed/{combined_name}"
+            except Exception as e:
+                print(f"[VideoEngine] Concat clips error: {e}")
+            finally:
+                if os.path.exists(concat_txt):
+                    try: os.unlink(concat_txt)
+                    except Exception: pass
+
+        return {
+            "success": True,
+            "total_clips": len(results),
+            "clips": results,
+            "combined_url": combined_url
+        }
 
 
 video_engine = VideoSyncEngine()
+

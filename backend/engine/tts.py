@@ -185,33 +185,44 @@ class KokoroTTSService:
         return True
 
     def get_available_voices(self, lang_filter: Optional[str] = None) -> List[Dict[str, Any]]:
-        self.initialize()
-        raw_voices = self.kokoro.get_voices()
         result = []
-        for vid in raw_voices:
-            if vid in VOICE_CATALOG:
-                v = VOICE_CATALOG[vid]
+
+        # Kokoro voice enumeration — only when the ONNX model actually loaded
+        if self.initialize() and self.kokoro is not None:
+            try:
+                raw_voices = self.kokoro.get_voices()
+                for vid in raw_voices:
+                    if vid in VOICE_CATALOG:
+                        v = VOICE_CATALOG[vid]
+                        if not lang_filter or lang_filter == "all" or v.get("lang") == lang_filter:
+                            result.append(v)
+                    else:
+                        gender = "Female" if vid[:2] in ("af", "bf", "ef", "ff", "hf", "if", "jf", "pf", "zf") else "Male"
+                        lang_code = vid[:2]
+                        lang_map = {"af": "American", "am": "American", "bf": "British", "bm": "British",
+                                    "ef": "Spanish", "em": "Spanish", "ff": "French", "hf": "Hindi",
+                                    "hm": "Hindi", "if": "Italian", "im": "Italian", "jf": "Japanese",
+                                    "jm": "Japanese", "pf": "Portuguese", "pm": "Portuguese",
+                                    "zf": "Mandarin", "zm": "Mandarin"}
+                        accent = lang_map.get(lang_code, "International")
+                        v = {
+                            "id": vid, "name": vid.replace("_", " ").title(), "gender": gender,
+                            "accent": accent, "lang": lang_code, "category": "General", "quality": "Studio",
+                            "speed_rating": "Fast", "speaking_style": f"Standard {accent} {gender} Voice",
+                            "recommended_use": "General Narration, Voiceovers",
+                            "preview_text": f"Hello, this is the {vid.replace('_', ' ').title()} voice."
+                        }
+                        if not lang_filter or lang_filter == "all" or lang_code == lang_filter:
+                            result.append(v)
+            except Exception as e:
+                print(f"[KokoroTTS] Voice enumeration failed ({e}) — falling back to catalog.")
+
+        # If the Kokoro model is unavailable/failed, expose the full static catalog
+        if not result:
+            for vid, v in VOICE_CATALOG.items():
                 if not lang_filter or lang_filter == "all" or v.get("lang") == lang_filter:
                     result.append(v)
-            else:
-                gender = "Female" if vid[:2] in ("af", "bf", "ef", "ff", "hf", "if", "jf", "pf", "zf") else "Male"
-                lang_code = vid[:2]
-                lang_map = {"af": "American", "am": "American", "bf": "British", "bm": "British",
-                            "ef": "Spanish", "em": "Spanish", "ff": "French", "hf": "Hindi",
-                            "hm": "Hindi", "if": "Italian", "im": "Italian", "jf": "Japanese",
-                            "jm": "Japanese", "pf": "Portuguese", "pm": "Portuguese",
-                            "zf": "Mandarin", "zm": "Mandarin"}
-                accent = lang_map.get(lang_code, "International")
-                v = {
-                    "id": vid, "name": vid.replace("_", " ").title(), "gender": gender,
-                    "accent": accent, "lang": lang_code, "category": "General", "quality": "Studio",
-                    "speed_rating": "Fast", "speaking_style": f"Standard {accent} {gender} Voice",
-                    "recommended_use": "General Narration, Voiceovers",
-                    "preview_text": f"Hello, this is the {vid.replace('_', ' ').title()} voice."
-                }
-                if not lang_filter or lang_filter == "all" or lang_code == lang_filter:
-                    result.append(v)
-        
+
         # Include Silero Indic & Edge Indic Neural voices
         for iv in INDIC_VOICES:
             if not lang_filter or lang_filter == "all" or iv.get("lang") == lang_filter:
@@ -267,6 +278,11 @@ class KokoroTTSService:
             return indic_tts_engine.generate(text, voice)
 
         self.initialize()
+        if self.kokoro is None:
+            raise RuntimeError(
+                "Kokoro ONNX model unavailable. The model files were not found and could not "
+                "be auto-downloaded. Restart the app to retry, or use an Indic voice."
+            )
         start_time = time.time()
         sample_rate = 24000
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useStudioStore, Voice } from '@/store/useStudioStore';
 import { Mic, Play, Check, Sparkles, Search, Globe, ShieldCheck, Zap, Languages } from 'lucide-react';
 
@@ -111,6 +111,16 @@ export const VoiceLibraryView: React.FC = () => {
   });
 
   const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null);
+  const previewPollRef = useRef<number | null>(null);
+
+  const stopPreviewPolling = () => {
+    if (previewPollRef.current !== null) {
+      clearInterval(previewPollRef.current);
+      previewPollRef.current = null;
+    }
+  };
+
+  useEffect(() => () => stopPreviewPolling(), []);
 
   const handlePreviewAudio = async (voice: Voice) => {
     if (previewingVoiceId === voice.id) return; // already loading
@@ -132,26 +142,27 @@ export const VoiceLibraryView: React.FC = () => {
       if (res.ok) {
         const { job_id } = await res.json();
         // Poll until audio is ready, then play directly without touching the store's selected voice
-        const poll = setInterval(async () => {
+        previewPollRef.current = window.setInterval(async () => {
           try {
             const jr = await fetch(`/api/jobs/${job_id}`);
-            if (!jr.ok) { clearInterval(poll); setPreviewingVoiceId(null); return; }
+            if (!jr.ok) { stopPreviewPolling(); setPreviewingVoiceId(null); return; }
             const job = await jr.json();
             if (job.status === 'complete' && job.audio_url) {
-              clearInterval(poll);
+              stopPreviewPolling();
               setPreviewingVoiceId(null);
               const audio = new Audio(job.audio_url);
-              audio.play();
+              audio.play().catch(() => {});
             } else if (job.status === 'failed') {
-              clearInterval(poll);
+              stopPreviewPolling();
               setPreviewingVoiceId(null);
             }
-          } catch { clearInterval(poll); setPreviewingVoiceId(null); }
+          } catch { stopPreviewPolling(); setPreviewingVoiceId(null); }
         }, 400);
       } else {
         setPreviewingVoiceId(null);
       }
     } catch {
+      stopPreviewPolling();
       setPreviewingVoiceId(null);
       useStudioStore.getState().showToast('Backend offline — start the server first', 'error');
     }

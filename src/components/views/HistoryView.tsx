@@ -9,6 +9,13 @@ export const HistoryView: React.FC = () => {
     fetchHistory();
   }, []);
 
+  const deleteItem = async (id: string) => {
+    try {
+      const res = await fetch(`/api/history/${id}`, { method: 'DELETE' });
+      if (res.ok) fetchHistory();
+    } catch {}
+  };
+
   return (
     <div className="p-8 space-y-6 max-w-[1400px] mx-auto select-none">
       <div>
@@ -62,6 +69,13 @@ export const HistoryView: React.FC = () => {
                   >
                     <Download className="w-3.5 h-3.5" /> Save WAV
                   </a>
+                  <button
+                    onClick={() => deleteItem(item.id)}
+                    className="p-2 text-text-muted hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
+                    title="Delete history entry"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             ))}

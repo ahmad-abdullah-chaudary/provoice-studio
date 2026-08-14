@@ -98,7 +98,7 @@ export interface EmotionPreset {
   paragraph_gap_ms?: number;
   description?: string;
 }
-type ActiveTab = 'dashboard' | 'editor' | 'voices' | 'batch' | 'queue' | 'dictionary' | 'history' | 'settings' | 'timeline' | 'videosync' | 'api';
+type ActiveTab = 'dashboard' | 'editor' | 'voices' | 'batch' | 'queue' | 'dictionary' | 'history' | 'settings' | 'timeline' | 'videosync' | 'trimmer' | 'api';
 
 // ─── Default DSP Settings ─────────────────────────────────────────────────────
 
@@ -152,7 +152,7 @@ interface StudioState {
   generationJob: GenerationJob;
   setGenerationJob: (j: Partial<GenerationJob>) => void;
   startGeneration: (text: string, segmentId?: string) => Promise<void>;
-  pollJob: (jobId: string, segmentId?: string) => void;
+  pollJob: (jobId: string, segmentId?: string) => Promise<void>;
 
   // Multi-Segment Editor
   segments: Segment[];
@@ -258,7 +258,7 @@ interface StudioState {
 
 async function apiFetch(url: string, opts?: RequestInit) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
+  const timer = setTimeout(() => controller.abort(), 15000);
   try {
     return await fetch(url, { ...opts, signal: controller.signal });
   } finally {
@@ -358,7 +358,7 @@ export const useStudioStore = create<StudioState>()(
       if (res.ok) {
         const { job_id } = await res.json();
         set((s) => ({ generationJob: { ...s.generationJob, id: job_id } }));
-        get().pollJob(job_id, segmentId);
+        await get().pollJob(job_id, segmentId);
       } else {
         set((s) => ({ generationJob: { ...s.generationJob, status: 'failed' } }));
         if (segmentId) get().updateSegment(segmentId, { status: 'error' });
@@ -369,11 +369,11 @@ export const useStudioStore = create<StudioState>()(
     }
   },
 
-  pollJob: (jobId: string, segmentId?: string) => {
+  pollJob: (jobId: string, segmentId?: string) => new Promise<void>((resolve) => {
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/jobs/${jobId}`);
-        if (!res.ok) { clearInterval(interval); return; }
+        if (!res.ok) { clearInterval(interval); resolve(); return; }
         const job = await res.json();
         get().setGenerationJob({
           status: job.status, progress: job.progress || 0,
@@ -392,14 +392,16 @@ export const useStudioStore = create<StudioState>()(
           get().showToast(`✓ Audio ready — ${job.duration}s rendered in ${job.render_time}s`, 'success');
           sendDesktopNotification('ProVoice Studio', `Audio ready — ${job.duration}s rendered!`);
           get().fetchHistory();
+          resolve();
         } else if (job.status === 'failed') {
           clearInterval(interval);
           if (segmentId) get().updateSegment(segmentId, { status: 'error' });
           get().showToast(`Generation failed: ${job.error || 'Unknown error'}`, 'error');
+          resolve();
         }
-      } catch { clearInterval(interval); }
+      } catch { clearInterval(interval); resolve(); }
     }, 600);
-  },
+  }),
 
   // Multi-Segment Editor
   segments: [initialSegment],

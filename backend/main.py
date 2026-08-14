@@ -94,7 +94,7 @@ def _process_batch_job_blocking(job: dict):
 async def batch_queue_worker():
     """Asyncio background worker — processes waiting batch jobs one at a time."""
     print("[BatchWorker] Queue worker started.")
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     while True:
         try:
             if not batch_queue.is_paused:

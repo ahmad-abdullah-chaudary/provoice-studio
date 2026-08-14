@@ -1,0 +1,27 @@
+[
+  {
+    "name": "Test",
+    "voice": "indic_hi_madhur",
+    "speed": 1.5,
+    "sentenceGapMs": 200,
+    "paragraphGapMs": 400,
+    "dspSettings": {
+      "silence_trim": true,
+      "noise_gate": false,
+      "equalizer": true,
+      "compressor": true,
+      "limiter": true,
+      "normalize": true,
+      "fade": true,
+      "eq_bass": 0,
+      "eq_presence": 0,
+      "eq_treble": 0,
+      "noise_gate_threshold": -50,
+      "compressor_threshold": -18,
+      "compressor_ratio": 3,
+      "normalize_peak": -1,
+      "lufs_normalize": true
+    },
+    "id": "preset_1786347485992"
+  }
+]

@@ -3,7 +3,7 @@ import { useStudioStore } from '@/store/useStudioStore';
 import {
   LayoutDashboard, FileText, Mic, Layers, ListMusic, BookOpen,
   Clock, Settings, Cpu, HardDrive, CheckCircle2, ChevronLeft, ChevronRight,
-  Film, Code2
+  Film, Code2, Scissors
 } from 'lucide-react';
 
 export const Sidebar: React.FC = () => {
@@ -28,6 +28,7 @@ export const Sidebar: React.FC = () => {
   const studioItems = [
     { id: 'timeline', label: 'Timeline Editor', icon: Layers },
     { id: 'videosync', label: 'Video Sync', icon: Film },
+    { id: 'trimmer', label: 'Batch Trimmer', icon: Scissors },
     { id: 'api', label: 'REST API', icon: Code2 },
   ] as const;
 

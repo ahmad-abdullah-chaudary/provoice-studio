@@ -1,14 +1,16 @@
 import os
+import re
 import time
 import json
 import asyncio
+import mimetypes
 import subprocess
 import numpy as np
 import psutil
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional
 
-from fastapi import APIRouter, HTTPException, File, UploadFile, Body, BackgroundTasks, Request
+from fastapi import APIRouter, HTTPException, File, UploadFile, Body, Form, BackgroundTasks, Request
 from pydantic import BaseModel
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -29,6 +31,46 @@ router = APIRouter()
 
 # Thread pool for CPU-bound TTS work (max 2 concurrent renders)
 _tts_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tts_worker")
+
+
+# ─── Helper: Path-traversal-safe filename & path validation ─────────────────
+
+def _safe_filename(filename: str, default: str = "file") -> str:
+    """Strip path components and reject unsafe characters (prevents traversal).
+
+    Preserves Unicode filenames but blocks ``/``, ``\\``, ``..`` and shell-injectable
+    characters by replacing them with underscores.
+    """
+    if not filename:
+        return default
+    base = os.path.basename(filename.replace("\\", "/"))
+    while ".." in base:
+        base = base.replace("..", "")
+    base = re.sub(r"[^A-Za-z0-9._\-\u0080-\uffff]", "_", base).strip(".")
+    return base or default
+
+
+TRIMMED_DIR = os.path.join(EXPORTS_DIR, "trimmed")
+os.makedirs(TRIMMED_DIR, exist_ok=True)
+
+
+def _validate_storage_path(path: str, purpose: str = "file") -> str:
+    """Return realpath of ``path``, refusing anything outside TEMP_DIR/EXPORTS_DIR/TRIMMED_DIR."""
+    abs_path = os.path.realpath(path)
+    allowed = (os.path.realpath(TEMP_DIR), os.path.realpath(EXPORTS_DIR), os.path.realpath(TRIMMED_DIR))
+    if not any(abs_path == a or abs_path.startswith(a + os.sep) for a in allowed):
+        raise HTTPException(status_code=400, detail=f"Invalid {purpose} path")
+    return abs_path
+
+
+def _resolve_audio_file(filename: str) -> str:
+    """Resolve a sanitized audio filename within TEMP_DIR or EXPORTS_DIR."""
+    safe = _safe_filename(filename)
+    for base_dir in (TEMP_DIR, EXPORTS_DIR):
+        candidate = os.path.join(base_dir, safe)
+        if os.path.exists(candidate):
+            return candidate
+    raise HTTPException(status_code=404, detail="Audio file not found")
 
 
 # ─── Helper: Run blocking TTS + DSP in a thread ────────────────────────────
@@ -72,9 +114,10 @@ def _run_generation_blocking(job_id: str, text: str, voice: str, speed: float, l
         render_time = round(time.time() - job_start, 2)
         file_size = os.path.getsize(wav_path)
 
+        job_state = get_job(job_id) or {}
         update_job(job_id,
                    status="complete",
-                   progress=get_job(job_id).get("total_chunks", 1),
+                   progress=job_state.get("total_chunks", 1),
                    audio_url=f"/api/audio/{wav_filename}",
                    duration=round(duration, 2),
                    render_time=render_time,
@@ -116,10 +159,10 @@ async def generate_speech(payload: Dict[str, Any] = Body(...)):
     """Start async TTS generation. Returns job_id immediately; poll /api/jobs/{id} for progress."""
     text = payload.get("text", "").strip()
     voice = payload.get("voice", "af_bella")
-    speed = float(payload.get("speed", 1.0))
+    speed = min(max(float(payload.get("speed", 1.0)), 0.5), 2.0)
     lang = payload.get("lang", "en-us")
-    sentence_gap = int(payload.get("sentence_gap_ms", 200))
-    paragraph_gap = int(payload.get("paragraph_gap_ms", 400))
+    sentence_gap = min(max(int(payload.get("sentence_gap_ms", 200)), 0), 3000)
+    paragraph_gap = min(max(int(payload.get("paragraph_gap_ms", 400)), 0), 5000)
     dsp_settings = payload.get("dsp", {
         "silence_trim": True, "limiter": True, "normalize": True, "fade": True,
         "micro_variation": True, "breathing_injection": True,
@@ -130,7 +173,7 @@ async def generate_speech(payload: Dict[str, Any] = Body(...)):
 
     job_id = create_job(text, voice)
     # Kick off in thread pool (non-blocking)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     loop.run_in_executor(
         _tts_executor,
         _run_generation_blocking,
@@ -162,9 +205,9 @@ async def upload_audio_file(file: UploadFile = File(...)):
     - Video files -> audio track extracted to WAV automatically; returns both
                      audio_url (extracted WAV) and video_url (backend video serve URL)
     """
-    original_ext = os.path.splitext(file.filename or "file.wav")[1].lower()
+    original_ext = os.path.splitext(_safe_filename(file.filename or "file.wav"))[1].lower()
     ts = int(time.time() * 1000)
-    orig_filename = f"upload_{ts}_{file.filename}"
+    orig_filename = f"upload_{ts}_{_safe_filename(file.filename or 'file.wav')}"
     out_path = os.path.join(TEMP_DIR, orig_filename)
 
     content = await file.read()
@@ -240,10 +283,11 @@ async def upload_audio_file(file: UploadFile = File(...)):
 
 @router.get("/video/serve/{filename}")
 def serve_uploaded_video(filename: str):
-    path = os.path.join(TEMP_DIR, filename)
+    safe = _safe_filename(filename)
+    path = os.path.join(TEMP_DIR, safe)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Video file not found")
-    ext = os.path.splitext(filename)[1].lower().lstrip(".")
+    ext = os.path.splitext(safe)[1].lower().lstrip(".")
     mime = {"mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime",
             "mkv": "video/x-matroska", "avi": "video/x-msvideo"}.get(ext, "video/mp4")
     return FileResponse(
@@ -257,12 +301,13 @@ def serve_uploaded_video(filename: str):
 
 @router.get("/audio/{filename}")
 def stream_audio(filename: str):
-    path = os.path.join(TEMP_DIR, filename)
-    if not os.path.exists(path):
-        path = os.path.join(EXPORTS_DIR, filename)
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Audio file not found")
-    return FileResponse(path, media_type="audio/wav", headers={"Accept-Ranges": "bytes"})
+    path = _resolve_audio_file(filename)
+    media_type, _ = mimetypes.guess_type(path)
+    return FileResponse(
+        path,
+        media_type=media_type or "audio/wav",
+        headers={"Accept-Ranges": "bytes"},
+    )
 
 
 
@@ -272,13 +317,15 @@ def stream_audio(filename: str):
 @router.post("/export")
 def export_audio(payload: Dict[str, Any] = Body(...)):
     """Convert a generated WAV to target format/quality and return download URL."""
-    source_filename = payload.get("filename", "")
+    raw_source = payload.get("filename", "")
     target_format = payload.get("format", "mp3").lower()
     quality = payload.get("quality", "Studio")
     custom_name = payload.get("custom_name", "").strip()
 
-    if not source_filename:
+    if not raw_source:
         raise HTTPException(status_code=400, detail="filename is required")
+
+    source_filename = _safe_filename(raw_source)
 
     wav_path = os.path.join(TEMP_DIR, source_filename)
     if not os.path.exists(wav_path):
@@ -289,7 +336,7 @@ def export_audio(payload: Dict[str, Any] = Body(...)):
     else:
         bitrate_map = {"Draft": "128k", "Standard": "192k", "Studio": "320k", "Lossless": "320k"}
         bitrate = bitrate_map.get(quality, "320k")
-        name_stem = custom_name if custom_name else os.path.splitext(source_filename)[0]
+        name_stem = _safe_filename(custom_name) if custom_name else os.path.splitext(source_filename)[0]
         output_filename = f"{name_stem}.{target_format}"
         output_path = os.path.join(EXPORTS_DIR, output_filename)
         os.makedirs(EXPORTS_DIR, exist_ok=True)
@@ -319,19 +366,19 @@ def export_audio(payload: Dict[str, Any] = Body(...)):
 
 @router.post("/mix")
 async def mix_audio(
-    voice_filename: str = Body(...),
+    voice_filename: str = Form(...),
     music_file: UploadFile = File(...),
-    voice_volume: float = Body(1.0),
-    music_volume: float = Body(0.15),
-    duck_under_speech: bool = Body(True),
+    voice_volume: float = Form(1.0),
+    music_volume: float = Form(0.15),
+    duck_under_speech: bool = Form(True),
 ):
     """Mix voice narration WAV with uploaded background music."""
-    voice_path = os.path.join(TEMP_DIR, voice_filename)
+    voice_path = os.path.join(TEMP_DIR, _safe_filename(voice_filename))
     if not os.path.exists(voice_path):
         raise HTTPException(status_code=404, detail="Voice audio file not found")
 
     # Save uploaded music to temp
-    music_ext = os.path.splitext(music_file.filename or "music.wav")[1] or ".wav"
+    music_ext = os.path.splitext(_safe_filename(music_file.filename or "music.wav"))[1] or ".wav"
     music_path = os.path.join(TEMP_DIR, f"music_upload_{int(time.time()*1000)}{music_ext}")
     contents = await music_file.read()
     with open(music_path, "wb") as f:
@@ -348,7 +395,7 @@ async def mix_audio(
         audio_exporter.save_wav(mixed, voice_sr, out_path)
         return out_filename, os.path.getsize(out_path)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     out_filename, file_size = await loop.run_in_executor(_tts_executor, _do_mix)
     return {"audio_url": f"/api/audio/{out_filename}", "file_size": file_size}
 
@@ -445,6 +492,12 @@ async def parse_subtitles(file: UploadFile = File(...)):
 @router.get("/history")
 def get_history():
     return {"history": storage_manager.list_history()}
+
+@router.delete("/history/{history_id}")
+def delete_history_entry(history_id: str):
+    if not storage_manager.delete_history(history_id):
+        raise HTTPException(status_code=404, detail="History entry not found")
+    return {"success": True}
 
 
 # ─── Queue ────────────────────────────────────────────────────────────────────
@@ -575,7 +628,7 @@ async def render_timeline(payload: Dict[str, Any] = Body(...)):
     if not tracks:
         raise HTTPException(status_code=400, detail="tracks list is required")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     def _do_mix():
         mixed, sr = timeline_mixer.mix_timeline(tracks, target_sr=target_sr, temp_dir=TEMP_DIR, exports_dir=EXPORTS_DIR)
         out_filename = f"timeline_{int(time.time()*1000)}.wav"
@@ -607,7 +660,10 @@ async def render_timeline(payload: Dict[str, Any] = Body(...)):
 @router.post("/video/extract")
 async def extract_video_audio(file: UploadFile = File(...)):
     """Upload a video file and extract its original audio track as WAV."""
-    ext = os.path.splitext(file.filename or "video.mp4")[1].lower()
+    safe_name = _safe_filename(file.filename or "video.mp4")
+    ext = os.path.splitext(safe_name)[1].lower()
+    if not ext:
+        ext = ".mp4"
     in_path = os.path.join(TEMP_DIR, f"upload_video_{int(time.time()*1000)}{ext}")
     out_path = os.path.join(TEMP_DIR, f"extracted_audio_{int(time.time()*1000)}.wav")
 
@@ -615,7 +671,7 @@ async def extract_video_audio(file: UploadFile = File(...)):
     with open(in_path, "wb") as f:
         f.write(contents)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     success = await loop.run_in_executor(None, video_engine.extract_audio, in_path, out_path)
     if not success:
         raise HTTPException(status_code=500, detail="FFmpeg audio extraction failed. Ensure FFmpeg is installed.")
@@ -644,7 +700,8 @@ async def export_video_with_narration(payload: Dict[str, Any] = Body(...)):
     if not video_path or not audio_filename:
         raise HTTPException(status_code=400, detail="video_path and audio_filename are required")
 
-    audio_path = os.path.join(TEMP_DIR, audio_filename)
+    video_path = _validate_storage_path(video_path, purpose="video path")
+    audio_path = os.path.join(TEMP_DIR, _safe_filename(audio_filename))
     if not os.path.exists(audio_path):
         raise HTTPException(status_code=404, detail="Audio file not found")
 
@@ -652,7 +709,7 @@ async def export_video_with_narration(payload: Dict[str, Any] = Body(...)):
     out_filename = f"exported_video_{int(time.time()*1000)}.mp4"
     out_path = os.path.join(EXPORTS_DIR, out_filename)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     success = await loop.run_in_executor(
         None, video_engine.export_video_with_audio,
         video_path, audio_path, out_path, preserve_original, original_vol
@@ -687,6 +744,7 @@ async def render_video_with_narration(payload: Dict[str, Any] = Body(...)):
 
     if not video_path:
         raise HTTPException(status_code=400, detail="video_path is required")
+    video_path = _validate_storage_path(video_path, purpose="video path")
     if not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail=f"Video file not found: {video_path}")
     if not raw_markers:
@@ -700,7 +758,7 @@ async def render_video_with_narration(payload: Dict[str, Any] = Body(...)):
             continue
         # Search in TEMP_DIR and EXPORTS_DIR
         for search_dir in [TEMP_DIR, EXPORTS_DIR]:
-            candidate = os.path.join(search_dir, fname)
+            candidate = os.path.join(search_dir, _safe_filename(fname))
             if os.path.exists(candidate):
                 resolved_markers.append({
                     "audio_path":     candidate,
@@ -722,7 +780,7 @@ async def render_video_with_narration(payload: Dict[str, Any] = Body(...)):
     out_filename = f"narrated_video_{int(time.time()*1000)}.mp4"
     out_path = os.path.join(EXPORTS_DIR, out_filename)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     def _do_render():
         return video_engine.export_video_with_markers(
             video_path=video_path,
@@ -779,18 +837,18 @@ async def api_v1_synthesize(payload: Dict[str, Any] = Body(...)):
         raise HTTPException(status_code=400, detail="text is required")
 
     voice = payload.get("voice", "af_bella")
-    speed = float(payload.get("speed", 1.0))
+    speed = min(max(float(payload.get("speed", 1.0)), 0.5), 2.0)
     lang = payload.get("lang", "en-us")
     emotion = payload.get("emotion", "normal")
 
     # Apply emotion preset defaults
     ep = EMOTION_PRESETS.get(emotion, EMOTION_PRESETS["normal"])
-    sentence_gap = int(payload.get("sentence_gap_ms", ep.get("sentence_gap_ms", 200)))
-    paragraph_gap = int(payload.get("paragraph_gap_ms", ep.get("paragraph_gap_ms", 400)))
+    sentence_gap = min(max(int(payload.get("sentence_gap_ms", ep.get("sentence_gap_ms", 200))), 0), 3000)
+    paragraph_gap = min(max(int(payload.get("paragraph_gap_ms", ep.get("paragraph_gap_ms", 400))), 0), 5000)
     dsp_settings = payload.get("dsp", {"silence_trim": True, "limiter": True, "normalize": True, "fade": True})
 
     job_id = create_job(text, voice)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     loop.run_in_executor(
         _tts_executor,
         _run_generation_blocking,
@@ -834,4 +892,51 @@ def unregister_webhook(hook_id: str):
     if not success:
         raise HTTPException(status_code=404, detail="Webhook not found")
     return {"success": True}
+
+
+# ─── Video Batch Trimmer ──────────────────────────────────────────────────────
+
+@router.post("/video/trim-batch")
+def video_trim_batch(payload: Dict[str, Any] = Body(...)):
+    """Batch trim video file into numbered clip segments (Clip 1, Clip 2, Clip 3...)."""
+    video_path = payload.get("video_path", "")
+    ranges = payload.get("ranges", [])
+    merge_all = payload.get("merge_all", False)
+
+    if not video_path:
+        raise HTTPException(status_code=400, detail="video_path is required")
+    if not ranges or not isinstance(ranges, list):
+        raise HTTPException(status_code=400, detail="ranges must be a non-empty array of objects")
+
+    # If video_path is a relative URL like /api/video/serve/upload_..., resolve to TEMP_DIR
+    if video_path.startswith("/api/video/serve/") or video_path.startswith("/api/audio/"):
+        filename = video_path.split("/")[-1]
+        video_path = os.path.join(TEMP_DIR, filename)
+
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail=f"Source video file not found: {video_path}")
+
+    # Process batch trim via VideoSyncEngine
+    res = video_engine.trim_video_batch(
+        video_path=video_path,
+        ranges=ranges,
+        output_dir=TRIMMED_DIR,
+        merge_all=merge_all,
+    )
+
+    if not res.get("success"):
+        raise HTTPException(status_code=500, detail=res.get("error", "Trimming failed"))
+
+    return res
+
+
+@router.get("/exports/trimmed/{filename}")
+def serve_trimmed_export(filename: str):
+    """Serve generated trimmed clip video file."""
+    safe_name = _safe_filename(filename)
+    path = os.path.join(TRIMMED_DIR, safe_name)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Trimmed file not found")
+    return FileResponse(path, media_type="video/mp4", filename=safe_name)
+
 

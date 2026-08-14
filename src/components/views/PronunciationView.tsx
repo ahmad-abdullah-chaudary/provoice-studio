@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { BookOpen, Plus, Trash2, Sparkles, CheckCircle2 } from 'lucide-react';
 
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 export const PronunciationView: React.FC = () => {
   const [globalRules, setGlobalRules] = useState<any[]>([]);
   const [targetWord, setTargetWord] = useState('');
@@ -45,7 +47,7 @@ export const PronunciationView: React.FC = () => {
   let testOutput = testInput;
   globalRules.forEach((rule) => {
     if (rule.word && rule.replace) {
-      const regex = new RegExp(`\\b${rule.word}\\b`, 'gi');
+      const regex = new RegExp(`\\b${escapeRegExp(rule.word)}\\b`, 'gi');
       testOutput = testOutput.replace(regex, rule.replace);
     }
   });

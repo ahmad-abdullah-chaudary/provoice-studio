@@ -13,6 +13,7 @@ import { HistoryView } from '@/components/views/HistoryView';
 import { SettingsView } from '@/components/views/SettingsView';
 import { TimelineView } from '@/components/views/TimelineView';
 import { VideoSyncView } from '@/components/views/VideoSyncView';
+import { VideoTrimmerView } from '@/components/views/VideoTrimmerView';
 import { ApiView } from '@/components/views/ApiView';
 import { AudioPlayer } from '@/components/player/AudioPlayer';
 import { ExportModal } from '@/components/ui/ExportModal';
@@ -109,6 +110,7 @@ export const App: React.FC = () => {
       case 'settings':    return <SettingsView />;
       case 'timeline':    return <TimelineView />;
       case 'videosync':   return <VideoSyncView />;
+      case 'trimmer':     return <VideoTrimmerView />;
       case 'api':         return <ApiView />;
       default:            return <DashboardView />;
     }

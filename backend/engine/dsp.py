@@ -429,7 +429,7 @@ class AudioDSPPipeline:
             processed = self.noise_gate(processed, threshold_db=thresh)
 
         # 3. De-Esser (before EQ — treat the source first)
-        if settings.get("de_esser", False):
+        if settings.get("de_esser", True):
             de_threshold = settings.get("de_esser_threshold", -22.0)
             de_ratio = settings.get("de_esser_ratio", 5.0)
             processed = self.de_esser(
@@ -449,7 +449,7 @@ class AudioDSPPipeline:
             )
 
         # 5. Harmonic Exciter (after EQ — enhance the shaped tone)
-        if settings.get("harmonic_exciter", False):
+        if settings.get("harmonic_exciter", True):
             exciter_amount = settings.get("harmonic_exciter_amount", 0.18)
             processed = self.harmonic_exciter(processed, sample_rate, amount=exciter_amount)
 
