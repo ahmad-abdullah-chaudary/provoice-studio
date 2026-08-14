@@ -254,7 +254,16 @@ export const VideoTrimmerView: React.FC = () => {
   };
 
   const handleLoadedMetadata = () => {
-    if (videoRef.current) setVideoDuration(videoRef.current.duration);
+    if (videoRef.current) {
+      setVideoDuration(videoRef.current.duration);
+      // Auto-play when a new video is imported
+      videoRef.current.play().then(() => {
+        setIsPlaying(true);
+      }).catch(() => {
+        // Browser may block autoplay, that's fine
+        setIsPlaying(false);
+      });
+    }
   };
 
   const togglePlay = () => {
