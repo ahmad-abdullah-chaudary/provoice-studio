@@ -92,15 +92,96 @@ export const VideoTrimmerView: React.FC = () => {
   const [isZipping, setIsZipping] = useState<boolean>(false);
 
   // Copyright Bypass State
-  const [showBypassPanel, setShowBypassPanel] = useState<boolean>(false);
+  const [showBypassPanel, setShowBypassPanel] = useState<boolean>(true);
   const [bypassProfile, setBypassProfile] = useState<string>('light');
   const [isBypassing, setIsBypassing] = useState<boolean>(false);
   const [bypassResult, setBypassResult] = useState<{ filename: string; download_url: string } | null>(null);
   const [bypassAfterUrl, setBypassAfterUrl] = useState<string | null>(null);
+  const [liveSimulate, setLiveSimulate] = useState<boolean>(true);
+
+  const BYPASS_PRESETS: Record<string, Record<string, boolean | number>> = {
+    light: {
+      flip: true,
+      zoom: 0,
+      hue: 10,
+      saturation: 1.0,
+      brightness: 0,
+      contrast: 1.0,
+      rotation: 0,
+      blur: 0,
+      speed: 1.0,
+      letterbox: false,
+      color_grade: false,
+      pitch_semitones: 2,
+      bg_noise: false,
+      eq_lowpass: false,
+      normalize: false,
+      stereo_remix: false,
+      reverb: false,
+    },
+    medium: {
+      flip: false,
+      zoom: 1.03,
+      hue: 0,
+      saturation: 1.0,
+      brightness: 0,
+      contrast: 1.0,
+      rotation: 0,
+      blur: 0,
+      speed: 1.02,
+      letterbox: false,
+      color_grade: true,
+      pitch_semitones: 3,
+      bg_noise: false,
+      eq_lowpass: false,
+      normalize: true,
+      stereo_remix: false,
+      reverb: false,
+    },
+    heavy: {
+      flip: true,
+      zoom: 1.05,
+      hue: 0,
+      saturation: 1.0,
+      brightness: 0,
+      contrast: 1.0,
+      rotation: 0.8,
+      blur: 0.3,
+      speed: 0.97,
+      letterbox: false,
+      color_grade: false,
+      pitch_semitones: 5,
+      bg_noise: true,
+      eq_lowpass: true,
+      normalize: false,
+      stereo_remix: true,
+      reverb: false,
+    },
+    cinematic: {
+      flip: false,
+      zoom: 0,
+      hue: 8,
+      saturation: 1.1,
+      brightness: 0,
+      contrast: 1.05,
+      rotation: 0,
+      blur: 0,
+      speed: 1.0,
+      letterbox: true,
+      color_grade: true,
+      pitch_semitones: 0,
+      bg_noise: false,
+      eq_lowpass: false,
+      normalize: true,
+      stereo_remix: false,
+      reverb: true,
+    },
+  };
+
   const [bypassSettings, setBypassSettings] = useState<Record<string, boolean | number>>({
-    flip: false,
+    flip: true,
     zoom: 0,
-    hue: 0,
+    hue: 10,
     saturation: 1.0,
     brightness: 0,
     contrast: 1.0,
@@ -109,13 +190,56 @@ export const VideoTrimmerView: React.FC = () => {
     speed: 1.0,
     letterbox: false,
     color_grade: false,
-    pitch_semitones: 0,
+    pitch_semitones: 2,
     bg_noise: false,
     eq_lowpass: false,
     normalize: false,
     stereo_remix: false,
     reverb: false,
   });
+
+  const applyBypassPreset = (presetId: string) => {
+    setBypassProfile(presetId);
+    if (BYPASS_PRESETS[presetId]) {
+      setBypassSettings({ ...BYPASS_PRESETS[presetId] });
+    }
+  };
+
+  // Real-time CSS filter generator for instant Before/Simulation visual preview
+  const getSimulatedFilterStyle = () => {
+    const filters: string[] = [];
+    if (bypassSettings.hue) filters.push(`hue-rotate(${bypassSettings.hue}deg)`);
+    if (bypassSettings.saturation && Number(bypassSettings.saturation) !== 1.0) {
+      filters.push(`saturate(${bypassSettings.saturation})`);
+    }
+    if (bypassSettings.brightness) {
+      filters.push(`brightness(${1 + Number(bypassSettings.brightness)})`);
+    }
+    if (bypassSettings.contrast && Number(bypassSettings.contrast) !== 1.0) {
+      filters.push(`contrast(${bypassSettings.contrast})`);
+    }
+    if (bypassSettings.blur) {
+      filters.push(`blur(${bypassSettings.blur}px)`);
+    }
+    if (bypassSettings.color_grade) {
+      filters.push('sepia(0.2) contrast(1.1) saturate(1.15)');
+    }
+
+    const transforms: string[] = [];
+    if (bypassSettings.flip) transforms.push('scaleX(-1)');
+    if (bypassSettings.zoom && Number(bypassSettings.zoom) > 1) {
+      transforms.push(`scale(${bypassSettings.zoom})`);
+    }
+    if (bypassSettings.rotation) {
+      transforms.push(`rotate(${bypassSettings.rotation}deg)`);
+    }
+
+    return {
+      filter: filters.length ? filters.join(' ') : 'none',
+      transform: transforms.length ? transforms.join(' ') : 'none',
+      transition: 'filter 0.2s ease, transform 0.2s ease',
+    };
+  };
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -1159,17 +1283,17 @@ export const VideoTrimmerView: React.FC = () => {
               </label>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {[
-                  { id: 'light', label: '🔵 Light (Subtle)', desc: 'Flip + Hue + Pitch ±2st' },
-                  { id: 'medium', label: '🟡 Medium', desc: 'Zoom + Color grade + Pitch ±3st' },
+                  { id: 'light', label: '🔵 Light (Subtle)', desc: 'Flip + Hue 10° + Pitch ±2st' },
+                  { id: 'medium', label: '🟡 Medium', desc: 'Zoom 1.03x + Color Grade + Pitch ±3st' },
                   { id: 'heavy', label: '🔴 Heavy (Max)', desc: 'Flip + Zoom + Blur + Pitch ±5st + Noise' },
-                  { id: 'cinematic', label: '🎨 Cinematic', desc: 'LUT + Letterbox + Reverb' },
+                  { id: 'cinematic', label: '🎨 Cinematic', desc: 'LUT Grade + Letterbox + Reverb' },
                 ].map((p) => (
                   <button
                     key={p.id}
-                    onClick={() => setBypassProfile(p.id)}
+                    onClick={() => applyBypassPreset(p.id)}
                     className={`p-3 rounded-lg border-2 text-left transition-all space-y-1 ${
                       bypassProfile === p.id
-                        ? 'border-accent bg-accent/10'
+                        ? 'border-accent bg-accent/10 shadow-sm'
                         : 'border-border bg-surface hover:border-accent/50'
                     }`}
                   >
@@ -1204,14 +1328,17 @@ export const VideoTrimmerView: React.FC = () => {
                   return (
                     <button
                       key={item.key}
-                      onClick={() => setBypassSettings((prev) => ({
-                        ...prev,
-                        [item.key]: isOn
-                          ? (item.type === 'bool' ? false : (item as any).off)
-                          : (item.type === 'bool' ? true : (item as any).val),
-                      }))}
+                      onClick={() => {
+                        setBypassProfile('custom');
+                        setBypassSettings((prev) => ({
+                          ...prev,
+                          [item.key]: isOn
+                            ? (item.type === 'bool' ? false : (item as any).off)
+                            : (item.type === 'bool' ? true : (item as any).val),
+                        }));
+                      }}
                       className={`p-2.5 rounded-lg border-2 text-xs font-semibold text-left transition-all ${
-                        isOn ? 'border-accent bg-accent/10 text-accent' : 'border-border bg-surface text-text-muted hover:border-accent/40'
+                        isOn ? 'border-accent bg-accent/10 text-accent font-bold' : 'border-border bg-surface text-text-muted hover:border-accent/40'
                       }`}
                     >
                       <span className="block text-base mb-0.5">{isOn ? '✅' : '⬜'}</span>
@@ -1240,14 +1367,17 @@ export const VideoTrimmerView: React.FC = () => {
                   return (
                     <button
                       key={item.key}
-                      onClick={() => setBypassSettings((prev) => ({
-                        ...prev,
-                        [item.key]: isOn
-                          ? (item.type === 'bool' ? false : (item as any).off)
-                          : (item.type === 'bool' ? true : (item as any).val),
-                      }))}
+                      onClick={() => {
+                        setBypassProfile('custom');
+                        setBypassSettings((prev) => ({
+                          ...prev,
+                          [item.key]: isOn
+                            ? (item.type === 'bool' ? false : (item as any).off)
+                            : (item.type === 'bool' ? true : (item as any).val),
+                        }));
+                      }}
                       className={`p-2.5 rounded-lg border-2 text-xs font-semibold text-left transition-all ${
-                        isOn ? 'border-accent bg-accent/10 text-accent' : 'border-border bg-surface text-text-muted hover:border-accent/40'
+                        isOn ? 'border-accent bg-accent/10 text-accent font-bold' : 'border-border bg-surface text-text-muted hover:border-accent/40'
                       }`}
                     >
                       <span className="block text-base mb-0.5">{isOn ? '✅' : '⬜'}</span>
@@ -1260,11 +1390,10 @@ export const VideoTrimmerView: React.FC = () => {
 
             {/* Action Row */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-3 border-t border-border">
-              <div className="text-xs text-text-muted flex items-start gap-2 max-w-sm">
+              <div className="text-xs text-text-muted flex items-start gap-2 max-w-md">
                 <ShieldAlert className="w-4 h-4 text-accent shrink-0 mt-0.5" />
                 <span>
-                  Selected preset + checked transforms will be applied to your <strong className="text-text-primary">entire uploaded video</strong>.
-                  The processed file can be downloaded and then trimmed using the timeline above.
+                  Preset <strong className="text-text-primary uppercase font-bold">{bypassProfile}</strong> + selected transforms will be applied to your video using FFmpeg.
                 </span>
               </div>
 
@@ -1310,37 +1439,81 @@ export const VideoTrimmerView: React.FC = () => {
                 className="px-7 py-3 text-xs font-bold text-white rounded-card bg-accent hover:bg-accent-hover border-2 border-text-primary shadow-neo-md hover:scale-105 active:scale-95 transition-all flex items-center gap-2.5"
               >
                 {isBypassing ? (
-                  <><RefreshCw className="w-4 h-4 animate-spin" /> Applying Bypass...</>
+                  <><RefreshCw className="w-4 h-4 animate-spin" /> Rendering Bypass Video...</>
                 ) : (
-                  <><ShieldAlert className="w-4 h-4" /> Apply Copyright Bypass</>
+                  <><ShieldAlert className="w-4 h-4" /> Apply & Render Copyright Bypass</>
                 )}
               </button>
             </div>
 
-            {/* Before / After Preview */}
-            {bypassAfterUrl && (
-              <div className="space-y-3 pt-2 border-t border-border">
+            {/* ─── ALWAYS-VISIBLE BEFORE & AFTER COMPARISON PREVIEW ─── */}
+            <div className="space-y-3 pt-3 border-t border-border">
+              <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
-                  <Eye className="w-4 h-4 text-accent" /> Before / After Preview
+                  <Eye className="w-4 h-4 text-accent" /> Before vs After Comparison
                 </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* BEFORE */}
-                  <div className="space-y-1.5">
-                    <span className="text-[11px] font-bold text-text-muted uppercase tracking-wider">🎬 Before (Original)</span>
-                    <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-border">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-text-muted text-[11px]">Real-time Live Preview:</span>
+                  <button
+                    onClick={() => setLiveSimulate(!liveSimulate)}
+                    className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all ${
+                      liveSimulate
+                        ? 'bg-accent text-white border-text-primary shadow-sm'
+                        : 'bg-surface text-text-secondary border-border hover:text-text-primary'
+                    }`}
+                  >
+                    {liveSimulate ? '⚡ Live Sim ON' : 'Off'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* BEFORE (ORIGINAL) */}
+                <div className="space-y-2 p-3 bg-surface rounded-xl border-2 border-border">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-text-primary uppercase tracking-wider flex items-center gap-1.5">
+                      🎬 Before (Original Raw Video)
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-surface-hover text-text-muted font-mono">
+                      No Filters
+                    </span>
+                  </div>
+                  <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border border-border">
+                    {videoUrl ? (
                       <video
-                        src={videoUrl || ''}
+                        src={videoUrl}
                         className="w-full h-full object-contain"
                         controls
                         muted
                       />
-                    </div>
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center text-text-muted text-xs p-4 text-center">
+                        <Upload className="w-6 h-6 mb-1 opacity-50" />
+                        Import a video above to see the Before preview
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* AFTER (TRANSFORMED / LIVE SIMULATION) */}
+                <div className="space-y-2 p-3 bg-surface rounded-xl border-2 border-accent/40 bg-accent/5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-accent uppercase tracking-wider flex items-center gap-1.5">
+                      ✨ After {bypassAfterUrl ? '(Rendered Output Video)' : '(Live Filter Simulation)'}
+                    </span>
+                    {bypassAfterUrl ? (
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-accent text-white font-bold">
+                        FFmpeg Rendered
+                      </span>
+                    ) : (
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-accent/20 text-accent font-bold">
+                        Simulated Preview
+                      </span>
+                    )}
                   </div>
 
-                  {/* AFTER */}
-                  <div className="space-y-1.5">
-                    <span className="text-[11px] font-bold text-accent uppercase tracking-wider">✅ After (Bypassed)</span>
-                    <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-accent/50">
+                  <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-accent/50">
+                    {bypassAfterUrl ? (
                       <video
                         src={bypassAfterUrl}
                         className="w-full h-full object-contain"
@@ -1348,20 +1521,41 @@ export const VideoTrimmerView: React.FC = () => {
                         autoPlay
                         muted
                       />
-                    </div>
-                    {bypassResult && (
-                      <a
-                        href={bypassResult.download_url}
-                        download
-                        className="btn-neo-primary w-full py-2 text-xs font-bold flex items-center justify-center gap-2 mt-1"
-                      >
-                        <Download className="w-3.5 h-3.5" /> Download Bypassed Video ({bypassResult.filename})
-                      </a>
+                    ) : videoUrl ? (
+                      <div className="w-full h-full overflow-hidden relative flex items-center justify-center">
+                        <video
+                          src={videoUrl}
+                          style={liveSimulate ? (getSimulatedFilterStyle() as React.CSSProperties) : undefined}
+                          className="w-full h-full object-contain"
+                          controls
+                          muted
+                        />
+                        {liveSimulate && (
+                          <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/70 text-[10px] font-bold text-accent border border-accent/40 backdrop-blur-sm pointer-events-none">
+                            Live Visual Preview
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center text-text-muted text-xs p-4 text-center">
+                        <ShieldAlert className="w-6 h-6 mb-1 text-accent opacity-50" />
+                        Import a video above to see the After preview
+                      </div>
                     )}
                   </div>
+
+                  {bypassResult && (
+                    <a
+                      href={bypassResult.download_url}
+                      download
+                      className="btn-neo-primary w-full py-2.5 text-xs font-bold flex items-center justify-center gap-2 mt-2 shadow-sm"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Download Bypassed Video ({bypassResult.filename})
+                    </a>
+                  )}
                 </div>
               </div>
-            )}
+            </div>
           </div>
         )}
       </div>
