@@ -378,39 +378,12 @@ export const VideoTrimmerView: React.FC = () => {
 
   // Execute FFmpeg Batch Trimming with Failproof API route fallback
   const handleStartTrimming = async () => {
-    if (!videoUrl && !backendVideoPath && !videoFile) {
-      showToast('Please import a video file first!', 'info');
-      return;
-    }
     if (segments.length === 0) {
       showToast('Please enter or paste timestamp ranges to trim!', 'info');
       return;
     }
 
-    let activeVideoPath = backendVideoPath;
-
-    // Auto-upload if needed
-    if (!activeVideoPath && videoFile) {
-      setIsUploading(true);
-      showToast('Uploading video to server...', 'info');
-      const formData = new FormData();
-      formData.append('file', videoFile);
-      try {
-        let res = await fetch('/api/video/upload', { method: 'POST', body: formData });
-        if (!res.ok) res = await fetch('/api/upload', { method: 'POST', body: formData });
-        if (res.ok) {
-          const data = await res.json();
-          activeVideoPath = data.video_path || data.video_url;
-          setBackendVideoPath(activeVideoPath);
-        }
-      } catch {
-        // Fallback
-      } finally {
-        setIsUploading(false);
-      }
-    }
-
-    if (!activeVideoPath) activeVideoPath = videoUrl || 'video.mp4';
+    const activeVideoPath = backendVideoPath || videoUrl || 'upload';
 
     setIsTrimming(true);
     setTrimmedResults([]);
