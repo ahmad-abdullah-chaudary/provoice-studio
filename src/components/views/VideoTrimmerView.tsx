@@ -3,12 +3,13 @@ import { useStudioStore } from '@/store/useStudioStore';
 import {
   Scissors, Upload, Play, Pause, Volume2, Download, Trash2,
   Plus, Clock, ArrowUp, ArrowDown, Film, CheckCircle2, AlertCircle,
-  Sparkles, RefreshCw, FileVideo, Layers, Video
+  Sparkles, RefreshCw, FileVideo, Layers, Video, Smartphone, Monitor, Square,
+  Zap, Archive, Layers3
 } from 'lucide-react';
 
 interface ClipSegment {
   id: string;
-  index: number; // 1, 2, 3...
+  index: number;
   rawInput: string;
   startSec: number;
   endSec: number;
@@ -30,6 +31,10 @@ interface TrimmedResult {
   error?: string;
 }
 
+type PreviewFrameMode = 'desktop' | 'mobile' | 'square';
+type ExportQualityMode = 'original' | '1080p' | '2k' | '4k';
+type AspectFitMode = 'original' | 'mobile_9_16' | 'square_1_1';
+
 export const VideoTrimmerView: React.FC = () => {
   const { showToast } = useStudioStore();
 
@@ -42,6 +47,12 @@ export const VideoTrimmerView: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+
+  // Preview Frame & Export Quality State
+  const [previewFrame, setPreviewFrame] = useState<PreviewFrameMode>('mobile');
+  const [exportQuality, setExportQuality] = useState<ExportQualityMode>('2k');
+  const [aspectFit, setAspectFit] = useState<AspectFitMode>('mobile_9_16');
 
   // Marker State
   const [markerStart, setMarkerStart] = useState<number | null>(null);
@@ -54,9 +65,12 @@ export const VideoTrimmerView: React.FC = () => {
 
   // Processing & Results State
   const [isTrimming, setIsTrimming] = useState<boolean>(false);
+  const [isDetectingSpeech, setIsDetectingSpeech] = useState<boolean>(false);
   const [mergeAll, setMergeAll] = useState<boolean>(false);
   const [trimmedResults, setTrimmedResults] = useState<TrimmedResult[]>([]);
   const [combinedUrl, setCombinedUrl] = useState<string | null>(null);
+  const [zipDownloadUrl, setZipDownloadUrl] = useState<string | null>(null);
+  const [isZipping, setIsZipping] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -70,7 +84,7 @@ export const VideoTrimmerView: React.FC = () => {
     return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
   };
 
-  // Helper: Parse any timestamp string into seconds
+  // Helper: Parse timestamp string to seconds
   const parseTimestamp = (str: string): number => {
     const clean = str ? str.trim().replace(',', '.') : '';
     if (!clean) return 0;
@@ -78,7 +92,6 @@ export const VideoTrimmerView: React.FC = () => {
     const parts = clean.split(':');
     try {
       if (parts.length === 4) {
-        // e.g. 0:0:1:45 -> H:M:S:MS (MS could be 2-digit frames/centiseconds or 3-digit ms)
         const h = parseFloat(parts[0]) || 0;
         const m = parseFloat(parts[1]) || 0;
         const s = parseFloat(parts[2]) || 0;
@@ -86,13 +99,11 @@ export const VideoTrimmerView: React.FC = () => {
         const ms = parts[3].length <= 2 ? msPart / 100 : msPart / 1000;
         return h * 3600 + m * 60 + s + ms;
       } else if (parts.length === 3) {
-        // e.g. 01:23:45.500
         const h = parseFloat(parts[0]) || 0;
         const m = parseFloat(parts[1]) || 0;
         const s = parseFloat(parts[2]) || 0;
         return h * 3600 + m * 60 + s;
       } else if (parts.length === 2) {
-        // e.g. 01:23.500 or 1:30
         const m = parseFloat(parts[0]) || 0;
         const s = parseFloat(parts[1]) || 0;
         return m * 60 + s;
@@ -114,7 +125,7 @@ export const VideoTrimmerView: React.FC = () => {
     return `${hrs}:${mins}:${secs}:${cs.toString().padStart(2, '0')}`;
   };
 
-  // Parse multi-line rawText whenever it changes
+  // Auto-parse multi-line rawText whenever it changes
   useEffect(() => {
     const lines = rawText.split('\n');
     const parsed: ClipSegment[] = [];
@@ -124,7 +135,6 @@ export const VideoTrimmerView: React.FC = () => {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) return;
 
-      // Split by '-' or 'to' or '->'
       let parts: string[] = [];
       if (trimmed.includes('->')) {
         parts = trimmed.split('->');
@@ -160,11 +170,8 @@ export const VideoTrimmerView: React.FC = () => {
     setSegments(parsed);
   }, [rawText]);
 
-  // Handle Video Upload
-  const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  // Upload Video File (supports File input & Drag and Drop)
+  const uploadVideoFile = async (file: File) => {
     setVideoFile(file);
     const localBlobUrl = URL.createObjectURL(file);
     setVideoUrl(localBlobUrl);
@@ -174,40 +181,60 @@ export const VideoTrimmerView: React.FC = () => {
     formData.append('file', file);
 
     try {
-      const res = await fetch('/api/upload', {
+      // Try /api/video/upload then fallback to /api/audio/upload
+      let res = await fetch('/api/video/upload', {
         method: 'POST',
         body: formData,
       });
 
+      if (!res.ok) {
+        res = await fetch('/api/audio/upload', {
+          method: 'POST',
+          body: formData,
+        });
+      }
+
       if (res.ok) {
         const data = await res.json();
-        setBackendVideoPath(data.video_url || data.audio_url);
-        showToast(`Video "${file.name}" uploaded successfully!`, 'success');
+        const serverPath = data.video_path || data.video_url || data.audio_url;
+        setBackendVideoPath(serverPath);
+        if (data.duration) setVideoDuration(data.duration);
+        showToast(`Video "${file.name}" imported successfully!`, 'success');
       } else {
-        showToast('Local preview active — backend upload failed', 'info');
+        showToast('Local preview active — server upload fallback used', 'info');
       }
     } catch {
-      showToast('Local preview active — server offline', 'info');
+      showToast('Local preview active — backend offline', 'info');
     } finally {
       setIsUploading(false);
     }
   };
 
-  // Video Time update listener
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) uploadVideoFile(file);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.type.startsWith('video/')) {
+      uploadVideoFile(file);
+    } else if (file) {
+      showToast('Please drop a valid video file (.mp4, .mkv, .mov, etc.)', 'error');
+    }
+  };
+
+  // Video playback listeners
   const handleTimeUpdate = () => {
-    if (videoRef.current) {
-      setCurrentTime(videoRef.current.currentTime);
-    }
+    if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
   };
 
-  // Video Metadata Loaded listener
   const handleLoadedMetadata = () => {
-    if (videoRef.current) {
-      setVideoDuration(videoRef.current.duration);
-    }
+    if (videoRef.current) setVideoDuration(videoRef.current.duration);
   };
 
-  // Toggle Play / Pause
   const togglePlay = () => {
     if (videoRef.current) {
       if (isPlaying) {
@@ -219,21 +246,17 @@ export const VideoTrimmerView: React.FC = () => {
     }
   };
 
-  // Set Playback Speed
   const changePlaybackRate = (rate: number) => {
     setPlaybackRate(rate);
-    if (videoRef.current) {
-      videoRef.current.playbackRate = rate;
-    }
+    if (videoRef.current) videoRef.current.playbackRate = rate;
   };
 
-  // Interactive Marker: Set Start
+  // Interactive Markers
   const handleSetStart = () => {
     setMarkerStart(currentTime);
     showToast(`Start marker set at ${formatShortTimecode(currentTime)}`, 'info');
   };
 
-  // Interactive Marker: Set End & Add Segment
   const handleSetEnd = () => {
     if (markerStart === null) {
       showToast('Please set a Start Marker first!', 'info');
@@ -253,7 +276,44 @@ export const VideoTrimmerView: React.FC = () => {
     showToast(`Added Clip range ${newLine}`, 'success');
   };
 
-  // Seek Video to segment and play
+  // Auto-Detect Speech & Generate Timelines
+  const handleDetectSpeech = async () => {
+    if (!backendVideoPath) {
+      showToast('Please upload a video file first!', 'info');
+      return;
+    }
+    setIsDetectingSpeech(true);
+
+    try {
+      const res = await fetch('/api/video/detect-silence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_path: backendVideoPath }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const speechSegs: Array<{ start_sec: number; end_sec: number }> = data.segments || [];
+        if (speechSegs.length === 0) {
+          showToast('No clear speech intervals detected', 'info');
+        } else {
+          const textLines = speechSegs
+            .map((s) => `${formatShortTimecode(s.start_sec)}-${formatShortTimecode(s.end_sec)}`)
+            .join('\n');
+          setRawText(textLines);
+          showToast(`Auto-detected ${speechSegs.length} speech clip timeline(s)!`, 'success');
+        }
+      } else {
+        showToast('Speech detection failed', 'error');
+      }
+    } catch {
+      showToast('Backend offline — start the server first', 'error');
+    } finally {
+      setIsDetectingSpeech(false);
+    }
+  };
+
+  // Seek & Preview Segment
   const previewSegment = (seg: ClipSegment) => {
     if (videoRef.current) {
       videoRef.current.currentTime = seg.startSec;
@@ -270,7 +330,7 @@ export const VideoTrimmerView: React.FC = () => {
     }
   };
 
-  // Reorder Segment
+  // Reorder / Delete Segments
   const moveSegment = (idx: number, direction: 'up' | 'down') => {
     const lines = rawText.split('\n').filter((l) => l.trim());
     const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
@@ -283,7 +343,6 @@ export const VideoTrimmerView: React.FC = () => {
     setRawText(lines.join('\n'));
   };
 
-  // Delete Segment
   const deleteSegment = (idx: number) => {
     const lines = rawText.split('\n').filter((l) => l.trim());
     lines.splice(idx, 1);
@@ -305,6 +364,7 @@ export const VideoTrimmerView: React.FC = () => {
     setIsTrimming(true);
     setTrimmedResults([]);
     setCombinedUrl(null);
+    setZipDownloadUrl(null);
 
     const rangesPayload = segments.map((seg) => ({
       clip_number: seg.index,
@@ -320,16 +380,16 @@ export const VideoTrimmerView: React.FC = () => {
           video_path: backendVideoPath,
           ranges: rangesPayload,
           merge_all: mergeAll,
+          export_quality: exportQuality,
+          aspect_fit: aspectFit,
         }),
       });
 
       if (res.ok) {
         const data = await res.json();
         setTrimmedResults(data.clips || []);
-        if (data.combined_url) {
-          setCombinedUrl(data.combined_url);
-        }
-        showToast(`Successfully trimmed ${data.total_clips} clips!`, 'success');
+        if (data.combined_url) setCombinedUrl(data.combined_url);
+        showToast(`Successfully trimmed ${data.total_clips} clips in ${exportQuality.toUpperCase()} quality!`, 'success');
       } else {
         const err = await res.json();
         showToast(`Batch trimming failed: ${err.detail || 'Error'}`, 'error');
@@ -341,67 +401,198 @@ export const VideoTrimmerView: React.FC = () => {
     }
   };
 
+  // Export ZIP Archive of All Clips
+  const handleExportZip = async () => {
+    if (trimmedResults.length === 0) return;
+    setIsZipping(true);
+
+    const filenames = trimmedResults.map((c) => c.filename).filter(Boolean);
+
+    try {
+      const res = await fetch('/api/video/export-zip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filenames }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.download_url) {
+          setZipDownloadUrl(data.download_url);
+          const a = document.createElement('a');
+          a.href = data.download_url;
+          a.download = data.filename || 'Trimmed_Clips.zip';
+          a.click();
+          showToast('ZIP Archive created and downloaded!', 'success');
+        }
+      } else {
+        showToast('ZIP packaging failed', 'error');
+      }
+    } catch {
+      showToast('Backend offline — cannot create ZIP', 'error');
+    } finally {
+      setIsZipping(false);
+    }
+  };
+
   return (
     <div className="p-8 space-y-6 max-w-[1600px] mx-auto select-none">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-text-primary flex items-center gap-2">
-            <Scissors className="w-6 h-6 text-accent" /> Batch Video Trimmer & Timeline Splitter
+            <Scissors className="w-6 h-6 text-accent" /> Batch Video Trimmer & 2K/4K Timeline Splitter
           </h1>
           <p className="text-sm text-text-secondary mt-1">
-            Upload any video and paste a list of timestamp ranges (e.g. <code className="bg-surface px-1.5 py-0.5 rounded border border-border text-accent font-mono text-xs">0:0:1:45-0:0:2:45</code>). Automatically numbers and trims clips (#1, #2, #3, #4...) with one-click export!
+            Import video, paste timeline ranges (e.g. <code className="bg-surface px-1.5 py-0.5 rounded border border-border text-accent font-mono text-xs">0:0:1:45-0:0:2:45</code>), preview in <strong>📱 Mobile 9:16 Shorts Mode</strong>, and export in <strong>2K QHD / 4K UHD</strong>!
           </p>
         </div>
 
-        {/* Top Controls */}
+        {/* Top Actions */}
         <div className="flex items-center gap-3">
+          <button
+            onClick={handleDetectSpeech}
+            disabled={isDetectingSpeech || !backendVideoPath}
+            className="px-3.5 py-2 rounded-badge text-xs font-semibold bg-accent/10 border border-accent/30 text-accent hover:bg-accent hover:text-white transition-all flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {isDetectingSpeech ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Zap className="w-3.5 h-3.5" />
+            )}
+            Auto-Detect Speech Timelines
+          </button>
           <button
             onClick={() => setRawText('0:0:1:45-0:0:2:45\n0:1:1:45-0:1:2:45\n0:2:10:00-0:2:30:00')}
             className="px-3.5 py-2 rounded-badge text-xs font-semibold bg-surface border border-border text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-all flex items-center gap-1.5"
           >
-            <Sparkles className="w-3.5 h-3.5 text-accent" /> Insert Demo Timelines
+            <Sparkles className="w-3.5 h-3.5 text-accent" /> Insert Demo
           </button>
         </div>
       </div>
 
       {/* Main Grid Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column (Video Player & Controls — 5 cols) */}
+        {/* Left Column (Video Player & Mobile Device Preview Frame — 5 cols) */}
         <div className="lg:col-span-5 space-y-4">
           <div className="card-neo p-5 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
-                <FileVideo className="w-4 h-4 text-accent" /> Video Source & Player
+                <FileVideo className="w-4 h-4 text-accent" /> Video Source & Preview Mode
               </h2>
-              {isUploading && (
-                <span className="text-xs text-accent animate-pulse font-medium">
-                  Uploading to server...
-                </span>
-              )}
+
+              {/* Preview Frame Mode Switcher */}
+              <div className="flex items-center gap-1 bg-surface p-1 rounded-lg border border-border text-[11px]">
+                <button
+                  onClick={() => setPreviewFrame('mobile')}
+                  className={`px-2 py-1 rounded flex items-center gap-1 transition-all ${
+                    previewFrame === 'mobile' ? 'bg-accent text-white font-bold' : 'text-text-secondary hover:text-text-primary'
+                  }`}
+                  title="📱 Mobile 9:16 Vertical Preview (Shorts / Reels / TikTok)"
+                >
+                  <Smartphone className="w-3 h-3" /> 9:16 Mobile
+                </button>
+                <button
+                  onClick={() => setPreviewFrame('desktop')}
+                  className={`px-2 py-1 rounded flex items-center gap-1 transition-all ${
+                    previewFrame === 'desktop' ? 'bg-accent text-white font-bold' : 'text-text-secondary hover:text-text-primary'
+                  }`}
+                  title="🖥️ Desktop 16:9 Widescreen Preview"
+                >
+                  <Monitor className="w-3 h-3" /> 16:9 Widescreen
+                </button>
+                <button
+                  onClick={() => setPreviewFrame('square')}
+                  className={`px-2 py-1 rounded flex items-center gap-1 transition-all ${
+                    previewFrame === 'square' ? 'bg-accent text-white font-bold' : 'text-text-secondary hover:text-text-primary'
+                  }`}
+                  title="🔳 Square 1:1 Feed Preview"
+                >
+                  <Square className="w-3 h-3" /> 1:1 Square
+                </button>
+              </div>
             </div>
 
-            {/* Video Player Box */}
-            <div className="relative aspect-video bg-black rounded-lg overflow-hidden border border-border flex items-center justify-center group">
+            {/* Drag & Drop Dropzone + Video Container */}
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              className={`relative bg-black rounded-xl overflow-hidden border-2 transition-all flex items-center justify-center ${
+                isDragging ? 'border-accent bg-accent/10' : 'border-border'
+              }`}
+            >
               {videoUrl ? (
-                <video
-                  ref={videoRef}
-                  src={videoUrl}
-                  onTimeUpdate={handleTimeUpdate}
-                  onLoadedMetadata={handleLoadedMetadata}
-                  onEnded={() => setIsPlaying(false)}
-                  className="w-full h-full object-contain"
-                />
+                /* Dynamic Preview Frames */
+                <div className="w-full flex items-center justify-center p-4">
+                  {previewFrame === 'mobile' ? (
+                    /* 📱 Mobile Smartphone Device Frame Mockup */
+                    <div className="relative w-[260px] h-[500px] bg-neutral-900 border-[8px] border-neutral-800 rounded-[38px] shadow-2xl overflow-hidden flex flex-col justify-between items-center group ring-1 ring-white/10">
+                      {/* Top Notch / Dynamic Island */}
+                      <div className="absolute top-2.5 z-20 w-24 h-4 bg-black rounded-full flex items-center justify-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-neutral-800" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-900" />
+                      </div>
+
+                      {/* Screen Video Content */}
+                      <div className="w-full h-full bg-black flex items-center justify-center overflow-hidden">
+                        <video
+                          ref={videoRef}
+                          src={videoUrl}
+                          onTimeUpdate={handleTimeUpdate}
+                          onLoadedMetadata={handleLoadedMetadata}
+                          onEnded={() => setIsPlaying(false)}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+
+                      {/* Mobile Overlay Branding */}
+                      <div className="absolute bottom-4 z-20 px-3 py-1 bg-black/60 backdrop-blur-md rounded-full border border-white/10 text-[10px] font-mono text-white/90 flex items-center gap-1.5">
+                        <Smartphone className="w-3 h-3 text-accent" /> 9:16 Shorts Preview
+                      </div>
+                    </div>
+                  ) : previewFrame === 'square' ? (
+                    /* 🔳 Square 1:1 Frame */
+                    <div className="relative w-[340px] h-[340px] bg-black rounded-lg overflow-hidden border border-border">
+                      <video
+                        ref={videoRef}
+                        src={videoUrl}
+                        onTimeUpdate={handleTimeUpdate}
+                        onLoadedMetadata={handleLoadedMetadata}
+                        onEnded={() => setIsPlaying(false)}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  ) : (
+                    /* 🖥️ Desktop 16:9 Widescreen Frame */
+                    <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border border-border">
+                      <video
+                        ref={videoRef}
+                        src={videoUrl}
+                        onTimeUpdate={handleTimeUpdate}
+                        onLoadedMetadata={handleLoadedMetadata}
+                        onEnded={() => setIsPlaying(false)}
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                  )}
+                </div>
               ) : (
-                <div className="text-center p-6 space-y-3">
-                  <Video className="w-12 h-12 text-text-muted mx-auto" />
-                  <p className="text-xs text-text-secondary">No video loaded yet</p>
-                  <label className="btn-neo-primary px-4 py-2 text-xs cursor-pointer inline-flex items-center gap-2">
-                    <Upload className="w-4 h-4" /> Upload Video
+                /* Import Dropzone */
+                <div className="text-center p-8 space-y-4">
+                  <div className="w-14 h-14 bg-accent/10 border border-accent/20 rounded-2xl flex items-center justify-center mx-auto text-accent">
+                    <Upload className="w-7 h-7" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-text-primary">Drag & Drop Video Here</h3>
+                    <p className="text-xs text-text-secondary mt-1">Supports MP4, MKV, MOV, WEBM, AVI files</p>
+                  </div>
+                  <label className="btn-neo-primary px-5 py-2.5 text-xs cursor-pointer inline-flex items-center gap-2 font-bold">
+                    <Video className="w-4 h-4" /> Browse Video File
                     <input
                       type="file"
                       accept="video/*"
-                      onChange={handleVideoUpload}
+                      onChange={handleFileInputChange}
                       className="hidden"
                     />
                   </label>
@@ -438,22 +629,22 @@ export const VideoTrimmerView: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={togglePlay}
-                      className="p-2 rounded-lg bg-surface border border-border text-text-primary hover:text-accent hover:bg-surface-hover transition-all"
+                      className="p-2.5 rounded-lg bg-surface border border-border text-text-primary hover:text-accent hover:bg-surface-hover transition-all"
                     >
                       {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
                     </button>
                     <label className="btn-neo-secondary px-3 py-1.5 text-xs cursor-pointer inline-flex items-center gap-1.5">
-                      <Upload className="w-3.5 h-3.5" /> Replace
+                      <Upload className="w-3.5 h-3.5" /> Import New Video
                       <input
                         type="file"
                         accept="video/*"
-                        onChange={handleVideoUpload}
+                        onChange={handleFileInputChange}
                         className="hidden"
                       />
                     </label>
                   </div>
 
-                  {/* Playback Rate Buttons */}
+                  {/* Speed Controls */}
                   <div className="flex items-center gap-1 bg-surface p-1 rounded-lg border border-border text-[11px]">
                     {[0.5, 1.0, 1.5, 2.0].map((rate) => (
                       <button
@@ -472,9 +663,9 @@ export const VideoTrimmerView: React.FC = () => {
                 </div>
 
                 {/* Interactive Timestamp Marker Buttons */}
-                <div className="p-3 bg-surface rounded-lg border border-border space-y-2">
+                <div className="p-3.5 bg-surface rounded-lg border border-border space-y-2">
                   <div className="text-[11px] font-bold text-text-muted uppercase tracking-wider">
-                    Quick Cursor Markers
+                    Interactive Cursor Markers
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <button
@@ -485,7 +676,7 @@ export const VideoTrimmerView: React.FC = () => {
                     </button>
                     <button
                       onClick={handleSetEnd}
-                      className="btn-neo-primary py-2 text-xs flex items-center justify-center gap-1.5"
+                      className="btn-neo-primary py-2 text-xs flex items-center justify-center gap-1.5 font-bold"
                     >
                       <Plus className="w-3.5 h-3.5" /> Set End & Add Clip
                     </button>
@@ -507,8 +698,45 @@ export const VideoTrimmerView: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column (Timelines Input & Numbered Clip Cards — 7 cols) */}
+        {/* Right Column (Timelines Input & 2K/4K Quality Controls — 7 cols) */}
         <div className="lg:col-span-7 space-y-4">
+          {/* Export Quality & Aspect Fitting Settings Panel */}
+          <div className="card-neo p-5 space-y-3">
+            <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
+              <Zap className="w-4 h-4 text-accent" /> 2K / 4K Export Quality & Aspect Fitting
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+              {/* Resolution Selector */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-text-secondary">Export Resolution:</label>
+                <select
+                  value={exportQuality}
+                  onChange={(e) => setExportQuality(e.target.value as ExportQualityMode)}
+                  className="w-full p-2 bg-surface rounded-input border border-border text-xs text-text-primary focus:outline-none focus:border-accent font-medium"
+                >
+                  <option value="original">⚡ Original (Stream Copy - Instant)</option>
+                  <option value="1080p">📺 1080p Full HD</option>
+                  <option value="2k">🚀 2K QHD (2560x1440 / 1440x2560 60fps)</option>
+                  <option value="4k">🌟 4K UHD (3840x2160 / 2160x3840 Ultra-Sharp)</option>
+                </select>
+              </div>
+
+              {/* Aspect Ratio Mode Selector */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-text-secondary">Mobile Aspect Fitting:</label>
+                <select
+                  value={aspectFit}
+                  onChange={(e) => setAspectFit(e.target.value as AspectFitMode)}
+                  className="w-full p-2 bg-surface rounded-input border border-border text-xs text-text-primary focus:outline-none focus:border-accent font-medium"
+                >
+                  <option value="mobile_9_16">📱 9:16 Vertical Short (Fill & Center Crop)</option>
+                  <option value="original">🖥️ Widescreen 16:9 Original</option>
+                  <option value="square_1_1">🔳 Square 1:1 Post</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
           {/* Timeline Input Textarea */}
           <div className="card-neo p-5 space-y-3">
             <div className="flex items-center justify-between">
@@ -637,33 +865,45 @@ export const VideoTrimmerView: React.FC = () => {
               >
                 {isTrimming ? (
                   <>
-                    <RefreshCw className="w-4 h-4 animate-spin" /> Trimming {segments.length} Clips...
+                    <RefreshCw className="w-4 h-4 animate-spin" /> Rendering in {exportQuality.toUpperCase()}...
                   </>
                 ) : (
                   <>
-                    <Scissors className="w-4 h-4" /> Start Trimming ({segments.length} Clips)
+                    <Scissors className="w-4 h-4" /> Start Trimming ({segments.length} Clips in {exportQuality.toUpperCase()})
                   </>
                 )}
               </button>
             </div>
           </div>
 
-          {/* Generated Results Section */}
+          {/* Generated Results Section & ZIP Export */}
           {trimmedResults.length > 0 && (
             <div className="card-neo p-5 space-y-4 bg-accent/5 border-accent/30">
-              <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3">
                 <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-success" /> Generated Trimmed Clips ({trimmedResults.length})
+                  <CheckCircle2 className="w-4 h-4 text-success" /> Generated Clips ({trimmedResults.length})
                 </h2>
-                {combinedUrl && (
-                  <a
-                    href={combinedUrl}
-                    download
-                    className="btn-neo-secondary px-3 py-1.5 text-xs flex items-center gap-1.5 text-accent font-bold"
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleExportZip}
+                    disabled={isZipping}
+                    className="btn-neo-primary px-3.5 py-1.5 text-xs flex items-center gap-1.5 font-bold"
                   >
-                    <Download className="w-3.5 h-3.5" /> Download Merged Reel
-                  </a>
-                )}
+                    {isZipping ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Archive className="w-3.5 h-3.5" />}
+                    Download All as ZIP
+                  </button>
+
+                  {combinedUrl && (
+                    <a
+                      href={combinedUrl}
+                      download
+                      className="btn-neo-secondary px-3.5 py-1.5 text-xs flex items-center gap-1.5 text-accent font-bold"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Download Merged Reel
+                    </a>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto">
@@ -689,7 +929,7 @@ export const VideoTrimmerView: React.FC = () => {
                       <a
                         href={clip.download_url}
                         download
-                        className="btn-neo-primary w-full py-1.5 text-xs flex items-center justify-center gap-1.5"
+                        className="btn-neo-secondary w-full py-1.5 text-xs flex items-center justify-center gap-1.5 font-semibold hover:text-accent"
                       >
                         <Download className="w-3.5 h-3.5" /> Download Clip #{clip.clip_number}
                       </a>

@@ -894,7 +894,46 @@ def unregister_webhook(hook_id: str):
     return {"success": True}
 
 
-# ─── Video Batch Trimmer ──────────────────────────────────────────────────────
+# ─── Video Upload & Batch Trimmer ──────────────────────────────────────────────────────
+
+@router.post("/video/upload")
+@router.post("/upload")
+async def upload_video_file(file: UploadFile = File(...)):
+    """Upload any video/audio file and return backend path and stream URL."""
+    filename = file.filename or "video.mp4"
+    safe_name = _safe_filename(filename)
+    ts = int(time.time() * 1000)
+    out_filename = f"upload_video_{ts}_{safe_name}"
+    out_path = os.path.join(TEMP_DIR, out_filename)
+
+    content = await file.read()
+    with open(out_path, "wb") as f_out:
+        f_out.write(content)
+
+    video_url = f"/api/video/serve/{out_filename}"
+    duration = 10.0
+
+    try:
+        probe_cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            out_path
+        ]
+        p_res = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+        if p_res.returncode == 0 and p_res.stdout.strip():
+            duration = round(float(p_res.stdout.strip()), 2)
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "filename": filename,
+        "video_path": out_path,
+        "video_url": video_url,
+        "duration": duration,
+    }
+
 
 @router.post("/video/trim-batch")
 def video_trim_batch(payload: Dict[str, Any] = Body(...)):
@@ -902,6 +941,8 @@ def video_trim_batch(payload: Dict[str, Any] = Body(...)):
     video_path = payload.get("video_path", "")
     ranges = payload.get("ranges", [])
     merge_all = payload.get("merge_all", False)
+    export_quality = payload.get("export_quality", "original") # original, 1080p, 2k, 4k
+    aspect_fit = payload.get("aspect_fit", "original")          # original, mobile_9_16, square_1_1
 
     if not video_path:
         raise HTTPException(status_code=400, detail="video_path is required")
@@ -922,6 +963,8 @@ def video_trim_batch(payload: Dict[str, Any] = Body(...)):
         ranges=ranges,
         output_dir=TRIMMED_DIR,
         merge_all=merge_all,
+        export_quality=export_quality,
+        aspect_fit=aspect_fit,
     )
 
     if not res.get("success"):
@@ -930,13 +973,54 @@ def video_trim_batch(payload: Dict[str, Any] = Body(...)):
     return res
 
 
+@router.post("/video/detect-silence")
+def detect_video_speech_silence(payload: Dict[str, Any] = Body(...)):
+    """Auto-detect speech segments in video file and return timestamp ranges."""
+    video_path = payload.get("video_path", "")
+    if video_path.startswith("/api/video/serve/") or video_path.startswith("/api/audio/"):
+        filename = video_path.split("/")[-1]
+        video_path = os.path.join(TEMP_DIR, filename)
+
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Source video file not found")
+
+    segments = video_engine.detect_speech_segments(video_path)
+    return {"success": True, "segments": segments}
+
+
+@router.post("/video/export-zip")
+def export_trimmed_clips_zip(payload: Dict[str, Any] = Body(...)):
+    """Package all generated trimmed clips into a single downloadable ZIP file."""
+    clip_filenames = payload.get("filenames", [])
+    if not clip_filenames:
+        raise HTTPException(status_code=400, detail="filenames list is required")
+
+    clip_paths = [os.path.join(TRIMMED_DIR, _safe_filename(fn)) for fn in clip_filenames]
+    ts = int(time.time())
+    zip_name = f"ProVoice_Trimmed_Clips_{ts}.zip"
+    zip_path = os.path.join(TRIMMED_DIR, zip_name)
+
+    success = video_engine.package_clips_to_zip(clip_paths, zip_path)
+    if not success or not os.path.exists(zip_path):
+        raise HTTPException(status_code=500, detail="Failed to create ZIP archive")
+
+    return {
+        "success": True,
+        "filename": zip_name,
+        "download_url": f"/api/exports/trimmed/{zip_name}",
+    }
+
+
 @router.get("/exports/trimmed/{filename}")
 def serve_trimmed_export(filename: str):
-    """Serve generated trimmed clip video file."""
+    """Serve generated trimmed clip video file or ZIP archive."""
     safe_name = _safe_filename(filename)
     path = os.path.join(TRIMMED_DIR, safe_name)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Trimmed file not found")
-    return FileResponse(path, media_type="video/mp4", filename=safe_name)
+
+    media_type = "application/zip" if safe_name.endswith(".zip") else "video/mp4"
+    return FileResponse(path, media_type=media_type, filename=safe_name)
+
 
 

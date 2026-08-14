@@ -232,8 +232,10 @@ class VideoSyncEngine:
         ranges: List[Dict[str, Any]],
         output_dir: str,
         merge_all: bool = False,
+        export_quality: str = "original",
+        aspect_fit: str = "original",
     ) -> Dict[str, Any]:
-        """Trim video according to a list of timestamp ranges and generate numbered clips."""
+        """Trim video with optional 2K/4K resolution encoding and aspect ratio fitting."""
         if not os.path.exists(video_path):
             return {"success": False, "error": f"Source video not found: {video_path}"}
 
@@ -243,6 +245,40 @@ class VideoSyncEngine:
         base_name = os.path.splitext(os.path.basename(video_path))[0]
         timestamp_id = int(time.time())
 
+        # Determine target resolution & video filter if requested
+        vf_filter = None
+        bitrate = "192k"
+        video_bitrate = "8M"
+
+        if export_quality == "2k":
+            video_bitrate = "16M"
+            if aspect_fit == "mobile_9_16":
+                vf_filter = "scale=1440:2560:force_original_aspect_ratio=increase,crop=1440:2560"
+            elif aspect_fit == "square_1_1":
+                vf_filter = "scale=1440:1440:force_original_aspect_ratio=increase,crop=1440:1440"
+            else:
+                vf_filter = "scale=2560:1440:force_original_aspect_ratio=decrease,pad=2560:1440:(ow-iw)/2:(oh-ih)/2"
+        elif export_quality == "4k":
+            video_bitrate = "32M"
+            if aspect_fit == "mobile_9_16":
+                vf_filter = "scale=2160:3840:force_original_aspect_ratio=increase,crop=2160:3840"
+            elif aspect_fit == "square_1_1":
+                vf_filter = "scale=2160:2160:force_original_aspect_ratio=increase,crop=2160:2160"
+            else:
+                vf_filter = "scale=3840:2160:force_original_aspect_ratio=decrease,pad=3840:2160:(ow-iw)/2:(oh-ih)/2"
+        elif export_quality == "1080p":
+            video_bitrate = "8M"
+            if aspect_fit == "mobile_9_16":
+                vf_filter = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+            elif aspect_fit == "square_1_1":
+                vf_filter = "scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080"
+            else:
+                vf_filter = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
+        elif aspect_fit == "mobile_9_16":
+            vf_filter = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+        elif aspect_fit == "square_1_1":
+            vf_filter = "scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080"
+
         for idx, item in enumerate(ranges, start=1):
             start_sec = float(item.get("start_sec", 0.0))
             end_sec = float(item.get("end_sec", 0.0))
@@ -251,38 +287,44 @@ class VideoSyncEngine:
             clip_name = f"Clip_{idx}_{base_name}_{timestamp_id}.mp4"
             clip_path = os.path.join(output_dir, clip_name)
 
-            # Try stream copy first for ultra-fast processing
-            cmd_copy = [
-                "ffmpeg", "-y",
-                "-ss", f"{start_sec:.3f}",
-                "-to", f"{end_sec:.3f}",
-                "-i", video_path,
-                "-c", "copy",
-                "-avoid_negative_ts", "make_zero",
-                clip_path
-            ]
-
             success = False
-            try:
-                res = subprocess.run(cmd_copy, capture_output=True, timeout=60)
-                if res.returncode == 0 and os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
-                    success = True
-            except Exception:
-                pass
 
-            # Fallback to ultrafast re-encode if copy fails or produces empty clip
+            # If original stream copy is requested and no filter needed
+            if export_quality == "original" and not vf_filter:
+                cmd_copy = [
+                    "ffmpeg", "-y",
+                    "-ss", f"{start_sec:.3f}",
+                    "-to", f"{end_sec:.3f}",
+                    "-i", video_path,
+                    "-c", "copy",
+                    "-avoid_negative_ts", "make_zero",
+                    clip_path
+                ]
+                try:
+                    res = subprocess.run(cmd_copy, capture_output=True, timeout=60)
+                    if res.returncode == 0 and os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
+                        success = True
+                except Exception:
+                    pass
+
+            # High Quality 2K/4K/1080p re-encode
             if not success:
                 cmd_encode = [
                     "ffmpeg", "-y",
                     "-ss", f"{start_sec:.3f}",
                     "-to", f"{end_sec:.3f}",
                     "-i", video_path,
-                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
-                    "-c:a", "aac", "-b:a", "192k",
+                ]
+                if vf_filter:
+                    cmd_encode += ["-vf", vf_filter]
+
+                cmd_encode += [
+                    "-c:v", "libx264", "-preset", "medium", "-b:v", video_bitrate,
+                    "-c:a", "aac", "-b:a", "320k",
                     clip_path
                 ]
                 try:
-                    res = subprocess.run(cmd_encode, capture_output=True, timeout=120)
+                    res = subprocess.run(cmd_encode, capture_output=True, timeout=300)
                     if res.returncode == 0 and os.path.exists(clip_path):
                         success = True
                 except Exception as e:
@@ -327,7 +369,7 @@ class VideoSyncEngine:
                 "-i", concat_txt, "-c", "copy", combined_path
             ]
             try:
-                res = subprocess.run(cmd_concat, capture_output=True, timeout=180)
+                res = subprocess.run(cmd_concat, capture_output=True, timeout=300)
                 if res.returncode == 0 and os.path.exists(combined_path):
                     combined_url = f"/api/exports/trimmed/{combined_name}"
             except Exception as e:
@@ -344,6 +386,99 @@ class VideoSyncEngine:
             "combined_url": combined_url
         }
 
+    @staticmethod
+    def detect_speech_segments(
+        video_path: str,
+        noise_db: float = -30.0,
+        min_silence_duration: float = 0.6,
+    ) -> List[Dict[str, float]]:
+        """Auto-detect non-silent speech intervals in video using FFmpeg silencedetect."""
+        if not os.path.exists(video_path):
+            return []
+
+        cmd = [
+            "ffmpeg", "-i", video_path,
+            "-af", f"silencedetect=noise={noise_db}dB:d={min_silence_duration}",
+            "-f", "null", "-"
+        ]
+
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            stderr = res.stderr or ""
+        except Exception:
+            return []
+
+        # Parse ffmpeg silencedetect logs
+        # [silencedetect @ ...] silence_start: 12.45
+        # [silencedetect @ ...] silence_end: 14.80 | silence_duration: 2.35
+        silence_starts = []
+        silence_ends = []
+
+        for line in stderr.splitlines():
+            if "silence_start:" in line:
+                m = re.search(r"silence_start:\s*([\d.]+)", line)
+                if m:
+                    silence_starts.append(float(m.group(1)))
+            elif "silence_end:" in line:
+                m = re.search(r"silence_end:\s*([\d.]+)", line)
+                if m:
+                    silence_ends.append(float(m.group(1)))
+
+        # Get total video duration
+        total_duration = 100.0
+        try:
+            probe_cmd = [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                video_path
+            ]
+            p_res = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+            total_duration = float(p_res.stdout.strip())
+        except Exception:
+            pass
+
+        # Convert silence intervals into speech intervals
+        speech_segments = []
+        current_time = 0.0
+
+        for i in range(min(len(silence_starts), len(silence_ends))):
+            s_start = silence_starts[i]
+            s_end = silence_ends[i]
+
+            if s_start > current_time + 0.3:
+                speech_segments.append({
+                    "start_sec": round(current_time, 2),
+                    "end_sec": round(s_start, 2),
+                    "duration": round(s_start - current_time, 2)
+                })
+            current_time = s_end
+
+        if current_time < total_duration - 0.3:
+            speech_segments.append({
+                "start_sec": round(current_time, 2),
+                "end_sec": round(total_duration, 2),
+                "duration": round(total_duration - current_time, 2)
+            })
+
+        return speech_segments
+
+    @staticmethod
+    def package_clips_to_zip(clip_paths: List[str], zip_output_path: str) -> bool:
+        """Compress a list of clip video paths into a single ZIP archive."""
+        import zipfile
+        os.makedirs(os.path.dirname(zip_output_path), exist_ok=True)
+        try:
+            with zipfile.ZipFile(zip_output_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                for p in clip_paths:
+                    if os.path.exists(p):
+                        zipf.write(p, arcname=os.path.basename(p))
+            return os.path.exists(zip_output_path)
+        except Exception as e:
+            print(f"[VideoEngine] Zip creation error: {e}")
+            return False
+
 
 video_engine = VideoSyncEngine()
+
 
