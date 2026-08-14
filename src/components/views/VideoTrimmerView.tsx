@@ -94,11 +94,9 @@ export const VideoTrimmerView: React.FC = () => {
   // Copyright Bypass State
   const [showBypassPanel, setShowBypassPanel] = useState<boolean>(false);
   const [bypassProfile, setBypassProfile] = useState<string>('light');
-  const [bypassApplyMode, setBypassApplyMode] = useState<'entire' | 'clip'>('entire');
   const [isBypassing, setIsBypassing] = useState<boolean>(false);
   const [bypassResult, setBypassResult] = useState<{ filename: string; download_url: string } | null>(null);
   const [bypassAfterUrl, setBypassAfterUrl] = useState<string | null>(null);
-  const bypassVideoRef = useRef<HTMLVideoElement | null>(null);
   const [bypassSettings, setBypassSettings] = useState<Record<string, boolean | number>>({
     flip: false,
     zoom: 0,
@@ -1237,6 +1235,8 @@ export const VideoTrimmerView: React.FC = () => {
                   { key: 'reverb', label: 'Subtle Reverb', type: 'bool' },
                 ].map((item) => {
                   const isOn = item.type === 'bool'
+                ].map((item) => {
+                  const isOn = item.type === 'bool'
                     ? !!bypassSettings[item.key]
                     : bypassSettings[item.key] !== (item as any).off;
                   return (
@@ -1260,28 +1260,14 @@ export const VideoTrimmerView: React.FC = () => {
               </div>
             </div>
 
-            {/* Apply Mode + Action Row */}
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-border">
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-bold text-text-primary">Apply To:</span>
-                <div className="flex items-center gap-1 bg-surface p-1 rounded-lg border border-border text-xs">
-                  <button
-                    onClick={() => setBypassApplyMode('entire')}
-                    className={`px-3 py-1 rounded font-bold transition-all ${
-                      bypassApplyMode === 'entire' ? 'bg-accent text-white' : 'text-text-secondary hover:text-text-primary'
-                    }`}
-                  >
-                    🎬 Entire Video
-                  </button>
-                  <button
-                    onClick={() => setBypassApplyMode('clip')}
-                    className={`px-3 py-1 rounded font-bold transition-all ${
-                      bypassApplyMode === 'clip' ? 'bg-accent text-white' : 'text-text-secondary hover:text-text-primary'
-                    }`}
-                  >
-                    ✂️ Current Clip Range
-                  </button>
-                </div>
+            {/* Action Row */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-3 border-t border-border">
+              <div className="text-xs text-text-muted flex items-start gap-2 max-w-sm">
+                <ShieldAlert className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+                <span>
+                  Selected preset + checked transforms will be applied to your <strong className="text-text-primary">entire uploaded video</strong>.
+                  The processed file can be downloaded and then trimmed using the timeline above.
+                </span>
               </div>
 
               <button
@@ -1293,18 +1279,21 @@ export const VideoTrimmerView: React.FC = () => {
                     video_path: backendVideoPath || videoUrl || 'upload',
                     profile: bypassProfile,
                     settings: bypassSettings,
-                    apply_mode: bypassApplyMode,
+                    apply_mode: 'entire',
                   };
-                  if (bypassApplyMode === 'clip' && segments.length > 0) {
-                    payload.start_sec = segments[0].startSec;
-                    payload.end_sec = segments[0].endSec;
-                  }
                   try {
-                    const res = await fetch('/api/video/copyright-bypass', {
+                    let res = await fetch('/api/video/copyright-bypass', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(payload),
                     });
+                    if (!res.ok && res.status === 404) {
+                      res = await fetch('/api/copyright-bypass', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                      });
+                    }
                     if (res.ok) {
                       const data = await res.json();
                       setBypassResult(data);
@@ -1312,7 +1301,7 @@ export const VideoTrimmerView: React.FC = () => {
                       showToast(`Bypass complete! Profile: ${data.profile}`, 'success');
                     } else {
                       const err = await res.json();
-                      showToast(`Bypass failed: ${err.detail}`, 'error');
+                      showToast(`Bypass failed: ${err.detail || 'Error processing'}`, 'error');
                     }
                   } catch {
                     showToast('Backend offline — start the server first', 'error');
@@ -1355,7 +1344,6 @@ export const VideoTrimmerView: React.FC = () => {
                     <span className="text-[11px] font-bold text-accent uppercase tracking-wider">✅ After (Bypassed)</span>
                     <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-accent/50">
                       <video
-                        ref={bypassVideoRef}
                         src={bypassAfterUrl}
                         className="w-full h-full object-contain"
                         controls

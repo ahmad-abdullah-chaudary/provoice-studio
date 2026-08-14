@@ -1046,6 +1046,7 @@ def get_bypass_preset(profile: str):
 
 
 @router.post("/video/copyright-bypass")
+@router.post("/copyright-bypass")
 def apply_copyright_bypass_route(payload: Dict[str, Any] = Body(...)):
     """
     Apply copyright bypass transformations to a video file.
