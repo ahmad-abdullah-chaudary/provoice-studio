@@ -1235,8 +1235,6 @@ export const VideoTrimmerView: React.FC = () => {
                   { key: 'reverb', label: 'Subtle Reverb', type: 'bool' },
                 ].map((item) => {
                   const isOn = item.type === 'bool'
-                ].map((item) => {
-                  const isOn = item.type === 'bool'
                     ? !!bypassSettings[item.key]
                     : bypassSettings[item.key] !== (item as any).off;
                   return (
