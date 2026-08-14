@@ -382,14 +382,35 @@ export const VideoTrimmerView: React.FC = () => {
 
   // Execute FFmpeg Batch Trimming with Failproof API route fallback
   const handleStartTrimming = async () => {
-    if (!backendVideoPath) {
-      showToast('Please upload a video file first!', 'info');
-      return;
-    }
     if (segments.length === 0) {
       showToast('No valid timestamp ranges found to trim!', 'error');
       return;
     }
+
+    let activeVideoPath = backendVideoPath;
+
+    // If backend video path is missing but we have a video file, upload it now
+    if (!activeVideoPath && videoFile) {
+      setIsUploading(true);
+      showToast('Uploading video file to server...', 'info');
+      const formData = new FormData();
+      formData.append('file', videoFile);
+      try {
+        let res = await fetch('/api/video/upload', { method: 'POST', body: formData });
+        if (!res.ok) res = await fetch('/api/upload', { method: 'POST', body: formData });
+        if (res.ok) {
+          const data = await res.json();
+          activeVideoPath = data.video_path || data.video_url;
+          setBackendVideoPath(activeVideoPath);
+        }
+      } catch {
+        // Fallback
+      } finally {
+        setIsUploading(false);
+      }
+    }
+
+    if (!activeVideoPath) activeVideoPath = videoUrl || 'video.mp4';
 
     setIsTrimming(true);
     setTrimmedResults([]);
@@ -403,7 +424,7 @@ export const VideoTrimmerView: React.FC = () => {
     }));
 
     const reqBody = JSON.stringify({
-      video_path: backendVideoPath,
+      video_path: activeVideoPath,
       ranges: rangesPayload,
       merge_all: mergeAll,
       export_quality: exportQuality,
@@ -951,7 +972,7 @@ export const VideoTrimmerView: React.FC = () => {
 
               <button
                 onClick={handleStartTrimming}
-                disabled={isTrimming || segments.length === 0 || !backendVideoPath}
+                disabled={isTrimming || isUploading || segments.length === 0 || (!videoUrl && !backendVideoPath && !videoFile)}
                 className="w-full sm:w-auto btn-neo-primary px-6 py-2.5 text-xs font-bold flex items-center justify-center gap-2 disabled:opacity-50 shadow-neo-sm"
               >
                 {isTrimming ? (

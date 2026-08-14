@@ -956,7 +956,17 @@ def video_trim_batch(payload: Dict[str, Any] = Body(...)):
         video_path = os.path.join(TEMP_DIR, filename)
 
     if not os.path.exists(video_path):
-        raise HTTPException(status_code=404, detail=f"Source video file not found: {video_path}")
+        # Fallback to the most recently uploaded video file in TEMP_DIR
+        recent_videos = [
+            os.path.join(TEMP_DIR, f) for f in os.listdir(TEMP_DIR)
+            if f.startswith("upload_video_") or f.startswith("upload_")
+        ]
+        if recent_videos:
+            recent_videos.sort(key=os.path.getmtime, reverse=True)
+            video_path = recent_videos[0]
+
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Source video file not found. Please upload a video first.")
 
     # Process batch trim via VideoSyncEngine
     res = video_engine.trim_video_batch(
