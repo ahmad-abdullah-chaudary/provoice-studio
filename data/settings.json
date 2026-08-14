@@ -1,0 +1,12 @@
+{
+  "theme": "light",
+  "language": "en-US",
+  "cpu_threads": 4,
+  "memory_limit_mb": 4096,
+  "auto_save": true,
+  "default_export_folder": "C:\\Users\\AHMAD CH\\Videos\\ProVoice Studio\\data\\exports",
+  "default_voice": "af_bella",
+  "default_export_format": "mp3",
+  "audio_quality": "Studio",
+  "sample_rate": 24000
+}

@@ -1,0 +1,96 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #FAFAFA;
+    color: #111111;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+/* Custom Soft Neobrutalist Button & Card Classes */
+.btn-neo {
+  background-color: #2563EB;
+  color: #FFFFFF;
+  border: 2px solid #111111;
+  box-shadow: 3px 3px 0 #111111;
+  font-weight: 600;
+  border-radius: 12px;
+  transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.15s ease;
+  user-select: none;
+}
+
+.btn-neo:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 5px 5px 0 #111111;
+  background-color: #1D4ED8;
+}
+
+.btn-neo:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: 1px 1px 0 #111111;
+}
+
+.btn-neo-secondary {
+  background-color: #FFFFFF;
+  color: #111111;
+  border: 2px solid #111111;
+  box-shadow: 3px 3px 0 #111111;
+  font-weight: 600;
+  border-radius: 12px;
+  transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.15s ease;
+  user-select: none;
+}
+
+.btn-neo-secondary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 5px 5px 0 #111111;
+  background-color: #F4F4F5;
+}
+
+.btn-neo-secondary:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: 1px 1px 0 #111111;
+}
+
+.card-neo {
+  background-color: #FFFFFF;
+  border: 1px solid #E5E5E5;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+  border-radius: 16px;
+  transition: all 0.2s ease;
+}
+
+.card-neo-active {
+  background-color: #FFFFFF;
+  border: 2px solid #111111;
+  box-shadow: 4px 4px 0 #111111;
+  border-radius: 16px;
+}
+
+/* Utilities */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #E4E4E7;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #A1A1AA;
+}

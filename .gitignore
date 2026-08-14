@@ -1,0 +1,87 @@
+# ── Node & Frontend Build ──────────────────────────────────────────────────
+node_modules/
+dist/
+dist-ssr/
+*.local
+.eslintcache
+
+# ── Python & Backend ────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.venv/
+venv/
+ENV/
+env/
+
+# ── Large Model Binaries (baked into desktop installer via PyInstaller) ───────
+# These are NOT pushed to the repo. They are bundled into the .exe/.dmg/.AppImage.
+models/
+*.onnx
+*.bin
+*.pth
+*.pt
+*.safetensors
+
+# ── User Data & Audio Outputs ───────────────────────────────────────────────
+data/temp/*
+data/exports/*
+data/history/*
+data/projects/*
+!data/temp/.gitkeep
+!data/exports/.gitkeep
+!data/history/.gitkeep
+!data/projects/.gitkeep
+
+# ── Environment & Logs ─────────────────────────────────────────────────────
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── OS & IDE Files ─────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.system_generated/
