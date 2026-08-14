@@ -4,7 +4,7 @@ import {
   Scissors, Upload, Play, Pause, Volume2, Download, Trash2,
   Plus, Clock, ArrowUp, ArrowDown, Film, CheckCircle2, AlertCircle,
   Sparkles, RefreshCw, FileVideo, Layers, Video, Smartphone, Monitor, Square,
-  Zap, Archive, Info, HelpCircle
+  Zap, Archive, Info, HelpCircle, RotateCcw, Eye
 } from 'lucide-react';
 
 interface ClipSegment {
@@ -49,6 +49,14 @@ export const VideoTrimmerView: React.FC = () => {
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
 
+  // Dedicated Clip Preview State
+  const [activePreviewClip, setActivePreviewClip] = useState<{
+    title: string;
+    startSec?: number;
+    endSec?: number;
+    clipUrl?: string;
+  } | null>(null);
+
   // Preview Frame & Export Quality State
   const [previewFrame, setPreviewFrame] = useState<PreviewFrameMode>('mobile');
   const [exportQuality, setExportQuality] = useState<ExportQualityMode>('2k');
@@ -85,7 +93,7 @@ export const VideoTrimmerView: React.FC = () => {
     return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
   };
 
-  // Helper: Parse timestamp string to seconds
+  // Helper: Parse any timestamp string into seconds (H:M:S:MS, HH:MM:SS.ms, MM:SS, SS)
   const parseTimestamp = (str: string): number => {
     const clean = str ? str.trim().replace(',', '.') : '';
     if (!clean) return 0;
@@ -93,6 +101,7 @@ export const VideoTrimmerView: React.FC = () => {
     const parts = clean.split(':');
     try {
       if (parts.length === 4) {
+        // e.g. 0:0:1:45 -> H:M:S:MS (Centiseconds / Frames)
         const h = parseFloat(parts[0]) || 0;
         const m = parseFloat(parts[1]) || 0;
         const s = parseFloat(parts[2]) || 0;
@@ -100,11 +109,13 @@ export const VideoTrimmerView: React.FC = () => {
         const ms = parts[3].length <= 2 ? msPart / 100 : msPart / 1000;
         return h * 3600 + m * 60 + s + ms;
       } else if (parts.length === 3) {
+        // e.g. 01:23:45.500
         const h = parseFloat(parts[0]) || 0;
         const m = parseFloat(parts[1]) || 0;
         const s = parseFloat(parts[2]) || 0;
         return h * 3600 + m * 60 + s;
       } else if (parts.length === 2) {
+        // e.g. 01:23.500 or 1:30
         const m = parseFloat(parts[0]) || 0;
         const s = parseFloat(parts[1]) || 0;
         return m * 60 + s;
@@ -171,35 +182,21 @@ export const VideoTrimmerView: React.FC = () => {
     setSegments(parsed);
   }, [rawText]);
 
-  // Upload Video File (supports File input & Drag and Drop)
+  // Upload Video File
   const uploadVideoFile = async (file: File) => {
     setVideoFile(file);
     const localBlobUrl = URL.createObjectURL(file);
     setVideoUrl(localBlobUrl);
+    setActivePreviewClip(null);
     setIsUploading(true);
 
     const formData = new FormData();
     formData.append('file', file);
 
     try {
-      let res = await fetch('/api/video/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!res.ok) {
-        res = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-        });
-      }
-
-      if (!res.ok) {
-        res = await fetch('/api/audio/upload', {
-          method: 'POST',
-          body: formData,
-        });
-      }
+      let res = await fetch('/api/video/upload', { method: 'POST', body: formData });
+      if (!res.ok) res = await fetch('/api/upload', { method: 'POST', body: formData });
+      if (!res.ok) res = await fetch('/api/audio/upload', { method: 'POST', body: formData });
 
       if (res.ok) {
         const data = await res.json();
@@ -209,11 +206,11 @@ export const VideoTrimmerView: React.FC = () => {
         showToast(`Video "${file.name}" imported successfully!`, 'success');
       } else {
         setBackendVideoPath(localBlobUrl);
-        showToast('Video preview loaded locally', 'info');
+        showToast('Video loaded for local preview', 'info');
       }
     } catch {
       setBackendVideoPath(localBlobUrl);
-      showToast('Video preview loaded locally', 'info');
+      showToast('Video loaded for local preview', 'info');
     } finally {
       setIsUploading(false);
     }
@@ -322,8 +319,14 @@ export const VideoTrimmerView: React.FC = () => {
     }
   };
 
-  // Seek & Preview Segment
+  // Dedicated Clip Preview: Seeks & plays ONLY that specific segment or trimmed video file
   const previewSegment = (seg: ClipSegment) => {
+    setActivePreviewClip({
+      title: `Clip #${seg.index} (${formatShortTimecode(seg.startSec)} → ${formatShortTimecode(seg.endSec)})`,
+      startSec: seg.startSec,
+      endSec: seg.endSec,
+    });
+
     if (videoRef.current) {
       videoRef.current.currentTime = seg.startSec;
       videoRef.current.play();
@@ -336,6 +339,24 @@ export const VideoTrimmerView: React.FC = () => {
           clearInterval(checkPause);
         }
       }, 100);
+    }
+  };
+
+  // Preview generated output clip
+  const previewOutputClip = (clip: TrimmedResult) => {
+    if (!clip.download_url) return;
+    setActivePreviewClip({
+      title: `Trimmed Output: Clip #${clip.clip_number} (${clip.filename})`,
+      clipUrl: clip.download_url,
+    });
+  };
+
+  const resetToFullVideo = () => {
+    setActivePreviewClip(null);
+    if (videoRef.current) {
+      videoRef.current.currentTime = 0;
+      videoRef.current.pause();
+      setIsPlaying(false);
     }
   };
 
@@ -359,7 +380,7 @@ export const VideoTrimmerView: React.FC = () => {
     showToast('Clip range removed', 'info');
   };
 
-  // Execute FFmpeg Batch Trimming
+  // Execute FFmpeg Batch Trimming with Failproof API route fallback
   const handleStartTrimming = async () => {
     if (!backendVideoPath) {
       showToast('Please upload a video file first!', 'info');
@@ -381,18 +402,28 @@ export const VideoTrimmerView: React.FC = () => {
       end_sec: seg.endSec,
     }));
 
+    const reqBody = JSON.stringify({
+      video_path: backendVideoPath,
+      ranges: rangesPayload,
+      merge_all: mergeAll,
+      export_quality: exportQuality,
+      aspect_fit: aspectFit,
+    });
+
     try {
-      const res = await fetch('/api/video/trim-batch', {
+      let res = await fetch('/api/video/trim-batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          video_path: backendVideoPath,
-          ranges: rangesPayload,
-          merge_all: mergeAll,
-          export_quality: exportQuality,
-          aspect_fit: aspectFit,
-        }),
+        body: reqBody,
       });
+
+      if (!res.ok) {
+        res = await fetch('/api/trim-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: reqBody,
+        });
+      }
 
       if (res.ok) {
         const data = await res.json();
@@ -444,6 +475,9 @@ export const VideoTrimmerView: React.FC = () => {
     }
   };
 
+  // Current video source URL (either full video or active clip preview URL)
+  const currentVideoSrc = activePreviewClip?.clipUrl || videoUrl;
+
   return (
     <div className="p-8 space-y-6 max-w-[1600px] mx-auto select-none">
       {/* Header */}
@@ -453,7 +487,7 @@ export const VideoTrimmerView: React.FC = () => {
             <Scissors className="w-6 h-6 text-accent" /> Batch Video Trimmer & 2K/4K Splitter
           </h1>
           <p className="text-sm text-text-secondary mt-1">
-            Import any video, paste or auto-detect timeline ranges, preview in <strong>📱 Mobile 9:16 Shorts Mode</strong>, and trim into numbered clips (#1, #2, #3...) with 2K/4K export!
+            Import video, paste timeline ranges (e.g. <code className="bg-surface px-1.5 py-0.5 rounded border border-border text-accent font-mono text-xs">0:0:1:45-0:0:2:45</code>), preview in <strong>📱 Mobile 9:16 Shorts Mode</strong>, and trim into numbered clips (#1, #2, #3...) with 2K/4K export!
           </p>
         </div>
 
@@ -461,7 +495,7 @@ export const VideoTrimmerView: React.FC = () => {
         <div className="flex items-center gap-3">
           <button
             onClick={() => setShowHowItWorks(!showHowItWorks)}
-            className="px-3 py-2 rounded-badge text-xs font-semibold bg-surface border border-border text-text-secondary hover:text-text-primary transition-all flex items-center gap-1.5"
+            className="px-3 py-2 rounded-badge text-xs font-bold bg-surface border border-border text-text-secondary hover:text-text-primary transition-all flex items-center gap-1.5"
           >
             <HelpCircle className="w-3.5 h-3.5 text-accent" /> {showHowItWorks ? 'Hide Guide' : 'How It Works'}
           </button>
@@ -479,7 +513,7 @@ export const VideoTrimmerView: React.FC = () => {
           </button>
           <button
             onClick={() => setRawText('0:0:1:45-0:0:2:45\n0:1:1:45-0:1:2:45\n0:2:10:00-0:2:30:00')}
-            className="px-3.5 py-2 rounded-badge text-xs font-semibold bg-surface border border-border text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-all flex items-center gap-1.5"
+            className="px-3.5 py-2 rounded-badge text-xs font-bold bg-surface border border-border text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-all flex items-center gap-1.5"
           >
             <Sparkles className="w-3.5 h-3.5 text-accent" /> Demo Timelines
           </button>
@@ -493,7 +527,7 @@ export const VideoTrimmerView: React.FC = () => {
             <span className="font-bold text-accent uppercase tracking-wider flex items-center gap-1.5">
               1. 📥 Import Video
             </span>
-            <p className="text-text-secondary">Drag & drop or browse any MP4, MKV, MOV, WEBM video into the player.</p>
+            <p className="text-text-secondary">Drag & drop or click Browse to import any MP4, MKV, MOV, WEBM video file.</p>
           </div>
           <div className="space-y-1">
             <span className="font-bold text-accent uppercase tracking-wider flex items-center gap-1.5">
@@ -505,13 +539,13 @@ export const VideoTrimmerView: React.FC = () => {
             <span className="font-bold text-accent uppercase tracking-wider flex items-center gap-1.5">
               3. 📱 Mobile 9:16 Preview
             </span>
-            <p className="text-text-secondary">Preview each clip directly inside the realistic smartphone frame for Shorts/Reels.</p>
+            <p className="text-text-secondary">Click Preview on Clip #1, #2... to test how each trimmed segment fits in the 9:16 frame.</p>
           </div>
           <div className="space-y-1">
             <span className="font-bold text-accent uppercase tracking-wider flex items-center gap-1.5">
               4. 🚀 2K/4K FFmpeg Trim
             </span>
-            <p className="text-text-secondary">Generates numbered clips (#1, #2, #3...) + 1-click ZIP or merged reel export!</p>
+            <p className="text-text-secondary">Extracts numbered clips (#1, #2, #3...) + 1-click ZIP or merged reel export!</p>
           </div>
         </div>
       )}
@@ -523,7 +557,7 @@ export const VideoTrimmerView: React.FC = () => {
           <div className="card-neo p-5 space-y-4">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
-                <FileVideo className="w-4 h-4 text-accent" /> Preview Frame Display
+                <FileVideo className="w-4 h-4 text-accent" /> Video Source & Preview Mode
               </h2>
 
               {/* Preview Frame Mode Switcher */}
@@ -558,104 +592,107 @@ export const VideoTrimmerView: React.FC = () => {
               </div>
             </div>
 
-            {/* Drag & Drop Dropzone + Video Container */}
+            {/* Active Clip Preview Banner */}
+            {activePreviewClip && (
+              <div className="p-2.5 bg-accent/10 border border-accent/30 rounded-lg flex items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 truncate font-semibold text-accent">
+                  <Eye className="w-4 h-4 shrink-0" />
+                  <span className="truncate">Previewing: {activePreviewClip.title}</span>
+                </div>
+                <button
+                  onClick={resetToFullVideo}
+                  className="px-2 py-1 rounded bg-surface border border-border text-[11px] font-bold text-text-primary hover:text-accent shrink-0 flex items-center gap-1"
+                >
+                  <RotateCcw className="w-3 h-3" /> Full Video
+                </button>
+              </div>
+            )}
+
+            {/* Single Persistent Video Container */}
             <div
               onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
               onDragLeave={() => setIsDragging(false)}
               onDrop={handleDrop}
-              className={`relative bg-black rounded-xl overflow-hidden border-2 transition-all flex items-center justify-center min-h-[460px] ${
-                isDragging ? 'border-accent bg-accent/10' : 'border-border'
+              className={`relative bg-neutral-950 rounded-xl overflow-hidden border-2 transition-all flex items-center justify-center min-h-[460px] ${
+                isDragging ? 'border-accent bg-accent/20 ring-4 ring-accent/30' : 'border-text-primary/40'
               }`}
             >
-              {videoUrl ? (
-                /* Dynamic Preview Frames */
+              {currentVideoSrc ? (
+                /* Single Persistent Video Element across frame mode switches */
                 <div className="w-full flex items-center justify-center p-4">
-                  {previewFrame === 'mobile' ? (
-                    /* 📱 Realistic Smartphone Device Frame Mockup */
-                    <div className="relative w-[270px] h-[510px] bg-neutral-950 border-[10px] border-neutral-800 rounded-[44px] shadow-2xl overflow-hidden flex flex-col justify-between items-center group ring-2 ring-white/10 relative">
-                      {/* Left Side Buttons (Volume) */}
-                      <span className="absolute -left-[12px] top-24 w-1 h-10 bg-neutral-700 rounded-l" />
-                      <span className="absolute -left-[12px] top-38 w-1 h-10 bg-neutral-700 rounded-l" />
-                      {/* Right Side Button (Power) */}
-                      <span className="absolute -right-[12px] top-28 w-1 h-12 bg-neutral-700 rounded-r" />
+                  <div
+                    className={`transition-all duration-300 ${
+                      previewFrame === 'mobile'
+                        ? 'relative w-[270px] h-[510px] bg-neutral-950 border-[10px] border-neutral-800 rounded-[44px] shadow-2xl overflow-hidden flex flex-col justify-between items-center group ring-2 ring-white/10'
+                        : previewFrame === 'square'
+                        ? 'relative w-[340px] h-[340px] bg-black rounded-lg overflow-hidden border-2 border-border shadow-lg'
+                        : 'relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-border shadow-lg'
+                    }`}
+                  >
+                    {previewFrame === 'mobile' && (
+                      <>
+                        {/* Side Hardware Buttons */}
+                        <span className="absolute -left-[12px] top-24 w-1 h-10 bg-neutral-700 rounded-l" />
+                        <span className="absolute -left-[12px] top-38 w-1 h-10 bg-neutral-700 rounded-l" />
+                        <span className="absolute -right-[12px] top-28 w-1 h-12 bg-neutral-700 rounded-r" />
 
-                      {/* Top Dynamic Island / Notch */}
-                      <div className="absolute top-2.5 z-30 w-28 h-4 bg-black rounded-full flex items-center justify-center gap-2.5 border border-white/10 shadow-sm">
-                        <span className="w-2 h-2 rounded-full bg-neutral-800" />
-                        <span className="w-1.5 h-1.5 rounded-full bg-blue-900 animate-pulse" />
-                      </div>
+                        {/* Top Dynamic Island / Notch */}
+                        <div className="absolute top-2.5 z-30 w-28 h-4 bg-black rounded-full flex items-center justify-center gap-2.5 border border-white/10 shadow-sm">
+                          <span className="w-2 h-2 rounded-full bg-neutral-800" />
+                          <span className="w-1.5 h-1.5 rounded-full bg-blue-900 animate-pulse" />
+                        </div>
+                      </>
+                    )}
 
-                      {/* Screen Video Viewport */}
-                      <div className="w-full h-full bg-black flex items-center justify-center overflow-hidden relative">
-                        <video
-                          ref={videoRef}
-                          src={videoUrl}
-                          onTimeUpdate={handleTimeUpdate}
-                          onLoadedMetadata={handleLoadedMetadata}
-                          onEnded={() => setIsPlaying(false)}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-
-                      {/* Bottom Mobile Gesture Home Bar */}
-                      <div className="absolute bottom-1.5 z-30 w-32 h-1 bg-white/40 rounded-full" />
-
-                      {/* Mobile Overlay Badge */}
-                      <div className="absolute bottom-5 z-30 px-3 py-1 bg-black/75 backdrop-blur-md rounded-full border border-white/20 text-[10px] font-mono text-white flex items-center gap-1.5 shadow-lg">
-                        <Smartphone className="w-3 h-3 text-accent" /> 9:16 Shorts Preview
-                      </div>
-                    </div>
-                  ) : previewFrame === 'square' ? (
-                    /* 🔳 Square 1:1 Frame */
-                    <div className="relative w-[340px] h-[340px] bg-black rounded-lg overflow-hidden border-2 border-border shadow-lg">
+                    {/* Persistent Video Tag */}
+                    <div className="w-full h-full bg-black flex items-center justify-center overflow-hidden relative">
                       <video
                         ref={videoRef}
-                        src={videoUrl}
+                        src={currentVideoSrc}
                         onTimeUpdate={handleTimeUpdate}
                         onLoadedMetadata={handleLoadedMetadata}
                         onEnded={() => setIsPlaying(false)}
-                        className="w-full h-full object-cover"
+                        className={`w-full h-full ${previewFrame === 'mobile' || previewFrame === 'square' ? 'object-cover' : 'object-contain'}`}
                       />
                     </div>
-                  ) : (
-                    /* 🖥️ Desktop 16:9 Widescreen Frame */
-                    <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-border shadow-lg">
-                      <video
-                        ref={videoRef}
-                        src={videoUrl}
-                        onTimeUpdate={handleTimeUpdate}
-                        onLoadedMetadata={handleLoadedMetadata}
-                        onEnded={() => setIsPlaying(false)}
-                        className="w-full h-full object-contain"
-                      />
-                    </div>
-                  )}
+
+                    {previewFrame === 'mobile' && (
+                      <>
+                        <div className="absolute bottom-1.5 z-30 w-32 h-1 bg-white/40 rounded-full" />
+                        <div className="absolute bottom-5 z-30 px-3 py-1 bg-black/75 backdrop-blur-md rounded-full border border-white/20 text-[10px] font-mono text-white flex items-center gap-1.5 shadow-lg">
+                          <Smartphone className="w-3 h-3 text-accent" /> 9:16 Shorts View
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
               ) : (
-                /* Import Dropzone */
-                <div className="text-center p-8 space-y-4">
-                  <div className="w-16 h-16 bg-accent/10 border-2 border-accent/30 rounded-2xl flex items-center justify-center mx-auto text-accent shadow-neo-sm">
-                    <Upload className="w-8 h-8" />
+                /* High-Contrast Dropzone */
+                <div className="text-center p-8 space-y-5">
+                  <div className="w-20 h-20 bg-accent/20 border-2 border-accent rounded-3xl flex items-center justify-center mx-auto text-accent shadow-neo-md animate-bounce">
+                    <Upload className="w-10 h-10" />
                   </div>
-                  <div>
-                    <h3 className="text-base font-bold text-text-primary">Drag & Drop Video Here</h3>
-                    <p className="text-xs text-text-secondary mt-1">Supports MP4, MKV, MOV, WEBM, AVI video files</p>
+                  <div className="space-y-1">
+                    <h3 className="text-lg font-bold text-white tracking-wide">Drag & Drop Video File Here</h3>
+                    <p className="text-xs text-neutral-300">Supports MP4, MKV, MOV, WEBM, AVI video formats</p>
                   </div>
-                  <label className="btn-neo-primary px-6 py-3 text-xs cursor-pointer inline-flex items-center gap-2 font-bold shadow-neo-sm">
-                    <Video className="w-4 h-4" /> Browse Video File
-                    <input
-                      type="file"
-                      accept="video/*"
-                      onChange={handleFileInputChange}
-                      className="hidden"
-                    />
-                  </label>
+                  <div className="pt-2">
+                    <label className="btn-neo-primary px-8 py-3.5 text-xs cursor-pointer inline-flex items-center gap-2.5 font-bold text-white shadow-neo-md hover:scale-105 active:scale-95 transition-all">
+                      <Video className="w-5 h-5 text-white" /> Browse Video File
+                      <input
+                        type="file"
+                        accept="video/*"
+                        onChange={handleFileInputChange}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
                 </div>
               )}
             </div>
 
             {/* Video Controls Bar */}
-            {videoUrl && (
+            {currentVideoSrc && (
               <div className="space-y-3">
                 {/* Seekbar & Timecode */}
                 <div className="space-y-1">
@@ -869,7 +906,7 @@ export const VideoTrimmerView: React.FC = () => {
                         className="px-2.5 py-1.5 rounded-md bg-surface-hover border border-border text-xs font-bold text-text-primary hover:text-accent hover:border-accent flex items-center gap-1 transition-all"
                         title="Preview clip range in video player"
                       >
-                        <Play className="w-3 h-3 fill-current text-accent" /> Preview
+                        <Play className="w-3 h-3 fill-current text-accent" /> Preview Clip
                       </button>
                       <button
                         onClick={() => moveSegment(idx, 'up')}
@@ -979,15 +1016,23 @@ export const VideoTrimmerView: React.FC = () => {
                       {clip.filename}
                     </p>
 
-                    {clip.download_url && (
-                      <a
-                        href={clip.download_url}
-                        download
-                        className="btn-neo-secondary w-full py-1.5 text-xs flex items-center justify-center gap-1.5 font-bold hover:text-accent"
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        onClick={() => previewOutputClip(clip)}
+                        className="btn-neo-secondary flex-1 py-1 text-[11px] font-bold flex items-center justify-center gap-1"
                       >
-                        <Download className="w-3.5 h-3.5" /> Download Clip #{clip.clip_number}
-                      </a>
-                    )}
+                        <Play className="w-3 h-3 fill-current text-accent" /> Play Clip
+                      </button>
+                      {clip.download_url && (
+                        <a
+                          href={clip.download_url}
+                          download
+                          className="btn-neo-primary flex-1 py-1 text-[11px] font-bold flex items-center justify-center gap-1"
+                        >
+                          <Download className="w-3 h-3" /> Download
+                        </a>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>

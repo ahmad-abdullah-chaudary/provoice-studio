@@ -936,6 +936,7 @@ async def upload_video_file(file: UploadFile = File(...)):
 
 
 @router.post("/video/trim-batch")
+@router.post("/trim-batch")
 def video_trim_batch(payload: Dict[str, Any] = Body(...)):
     """Batch trim video file into numbered clip segments (Clip 1, Clip 2, Clip 3...)."""
     video_path = payload.get("video_path", "")
