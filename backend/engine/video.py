@@ -636,6 +636,11 @@ class VideoSyncEngine:
         # Fast seek if time range or preview duration is requested
         if preview_duration > 0:
             cmd += ["-ss", f"{start_sec:.3f}", "-t", f"{preview_duration:.3f}"]
+            # Optimize preview resolution for instant rendering
+            if vf:
+                vf = f"{vf},scale=-2:720"
+            else:
+                vf = "scale=-2:720"
         elif start_sec > 0 or end_sec > 0:
             cmd += ["-ss", f"{start_sec:.3f}", "-to", f"{end_sec:.3f}"]
 
@@ -657,7 +662,7 @@ class VideoSyncEngine:
         ]
 
         if has_audio:
-            cmd += ["-c:a", "aac", "-b:a", "192k"]
+            cmd += ["-c:a", "aac", "-ac", "2", "-b:a", "128k"]
         else:
             cmd += ["-an"]
 
