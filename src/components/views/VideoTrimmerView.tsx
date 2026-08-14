@@ -4,7 +4,7 @@ import {
   Scissors, Upload, Play, Pause, Download, Trash2,
   Plus, Clock, ArrowUp, ArrowDown, Film, CheckCircle2,
   Sparkles, RefreshCw, FileVideo, Layers, Video, Smartphone, Monitor, Square,
-  Zap, Archive, Eye, RotateCcw
+  Zap, Archive, Eye, RotateCcw, X, EyeOff, LayoutGrid, FileText
 } from 'lucide-react';
 
 interface ClipSegment {
@@ -65,22 +65,42 @@ export const VideoTrimmerView: React.FC = () => {
   // Marker State
   const [markerStart, setMarkerStart] = useState<number | null>(null);
 
-  // Text Timeline Input State
-  const [rawText, setRawText] = useState<string>(
-    '0:0:1:45-0:0:2:45\n0:1:1:45-0:1:2:45'
-  );
+  // Persistent Text Timeline Input State (Loaded from localStorage)
+  const [rawText, setRawText] = useState<string>(() => {
+    return localStorage.getItem('provoice_trimmer_raw_text') || '0:0:1:45-0:0:2:45\n0:1:1:45-0:1:2:45';
+  });
   const [segments, setSegments] = useState<ClipSegment[]>([]);
 
-  // Processing & Results State
+  // Persistent Results State (Loaded from localStorage)
+  const [trimmedResults, setTrimmedResults] = useState<TrimmedResult[]>(() => {
+    const saved = localStorage.getItem('provoice_trimmer_results');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  // Section Visibility / Dismiss State (on click crossed)
+  const [showImportCard, setShowImportCard] = useState<boolean>(true);
+  const [showTimelineEditor, setShowTimelineEditor] = useState<boolean>(true);
+  const [showClipSequence, setShowClipSequence] = useState<boolean>(true);
+  const [showResultsPanel, setShowResultsPanel] = useState<boolean>(true);
+
+  // Processing State
   const [isTrimming, setIsTrimming] = useState<boolean>(false);
   const [isDetectingSpeech, setIsDetectingSpeech] = useState<boolean>(false);
   const [mergeAll, setMergeAll] = useState<boolean>(false);
-  const [trimmedResults, setTrimmedResults] = useState<TrimmedResult[]>([]);
   const [combinedUrl, setCombinedUrl] = useState<string | null>(null);
   const [zipDownloadUrl, setZipDownloadUrl] = useState<string | null>(null);
   const [isZipping, setIsZipping] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Save persistent state whenever changed
+  useEffect(() => {
+    localStorage.setItem('provoice_trimmer_raw_text', rawText);
+  }, [rawText]);
+
+  useEffect(() => {
+    localStorage.setItem('provoice_trimmer_results', JSON.stringify(trimmedResults));
+  }, [trimmedResults]);
 
   // Helper: Format seconds to HH:MM:SS.ms
   const formatTimecode = (sec: number): string => {
@@ -376,7 +396,12 @@ export const VideoTrimmerView: React.FC = () => {
     showToast('Clip range removed', 'info');
   };
 
-  // Execute FFmpeg Batch Trimming with Failproof API route fallback
+  const removeResultClip = (clipNum: number) => {
+    setTrimmedResults((prev) => prev.filter((c) => c.clip_number !== clipNum));
+    showToast(`Clip #${clipNum} removed from results`, 'info');
+  };
+
+  // Execute FFmpeg Batch Trimming
   const handleStartTrimming = async () => {
     if (segments.length === 0) {
       showToast('Please enter or paste timestamp ranges to trim!', 'info');
@@ -386,7 +411,6 @@ export const VideoTrimmerView: React.FC = () => {
     const activeVideoPath = backendVideoPath || videoUrl || 'upload';
 
     setIsTrimming(true);
-    setTrimmedResults([]);
     setCombinedUrl(null);
     setZipDownloadUrl(null);
 
@@ -422,6 +446,7 @@ export const VideoTrimmerView: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         setTrimmedResults(data.clips || []);
+        setShowResultsPanel(true);
         if (data.combined_url) setCombinedUrl(data.combined_url);
         showToast(`Successfully trimmed ${data.total_clips} clip(s)!`, 'success');
       } else {
@@ -469,24 +494,57 @@ export const VideoTrimmerView: React.FC = () => {
     }
   };
 
-  // Current video source URL (either full video or active clip preview URL)
+  // Current video source URL
   const currentVideoSrc = activePreviewClip?.clipUrl || videoUrl;
 
   return (
     <div className="p-8 space-y-6 max-w-[1600px] mx-auto select-none">
-      {/* Clean Header */}
+      {/* Clean Header & View Restore Bar */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-text-primary flex items-center gap-2">
             <Scissors className="w-6 h-6 text-accent" /> Batch Video Trimmer & Timeline Splitter
           </h1>
           <p className="text-sm text-text-secondary mt-1">
-            Import video, paste timelines (e.g. <code className="bg-surface px-1.5 py-0.5 rounded border border-border text-accent font-mono text-xs">0:0:1:45-0:0:2:45</code>), preview on <strong>📱 Mobile 9:16 Shorts Mode</strong>, and trim into numbered clips!
+            Separate video import, device preview frames, persistent text timeline editor & output clips.
           </p>
         </div>
 
-        {/* Top Actions */}
-        <div className="flex items-center gap-3">
+        {/* Restore Section Badges */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {!showImportCard && (
+            <button
+              onClick={() => setShowImportCard(true)}
+              className="px-2.5 py-1 rounded bg-surface border border-border text-xs font-bold text-accent hover:bg-accent/10 flex items-center gap-1"
+            >
+              <Upload className="w-3.5 h-3.5" /> Show Video Import
+            </button>
+          )}
+          {!showTimelineEditor && (
+            <button
+              onClick={() => setShowTimelineEditor(true)}
+              className="px-2.5 py-1 rounded bg-surface border border-border text-xs font-bold text-accent hover:bg-accent/10 flex items-center gap-1"
+            >
+              <FileText className="w-3.5 h-3.5" /> Show Timelines Editor
+            </button>
+          )}
+          {!showClipSequence && (
+            <button
+              onClick={() => setShowClipSequence(true)}
+              className="px-2.5 py-1 rounded bg-surface border border-border text-xs font-bold text-accent hover:bg-accent/10 flex items-center gap-1"
+            >
+              <Film className="w-3.5 h-3.5" /> Show Clip Sequence
+            </button>
+          )}
+          {!showResultsPanel && trimmedResults.length > 0 && (
+            <button
+              onClick={() => setShowResultsPanel(true)}
+              className="px-2.5 py-1 rounded bg-surface border border-border text-xs font-bold text-success hover:bg-success/10 flex items-center gap-1"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" /> Show Trimmed Results ({trimmedResults.length})
+            </button>
+          )}
+
           <button
             onClick={handleDetectSpeech}
             disabled={isDetectingSpeech || (!backendVideoPath && !videoUrl)}
@@ -497,25 +555,73 @@ export const VideoTrimmerView: React.FC = () => {
             ) : (
               <Zap className="w-3.5 h-3.5" />
             )}
-            Auto-Detect Speech Timelines
-          </button>
-          <button
-            onClick={() => setRawText('0:0:1:45-0:0:2:45\n0:1:1:45-0:1:2:45\n0:2:10:00-0:2:30:00')}
-            className="px-3.5 py-2 rounded-badge text-xs font-bold bg-surface border border-border text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-all flex items-center gap-1.5"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-accent" /> Demo Timelines
+            Auto-Detect Speech
           </button>
         </div>
       </div>
 
+      {/* ─── SECTION 1: SEPARATE DEDICATED VIDEO IMPORT CARD ─── */}
+      {showImportCard && (
+        <div className="card-neo p-5 space-y-3 relative">
+          <div className="flex items-center justify-between border-b border-border pb-3">
+            <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
+              <Upload className="w-4 h-4 text-accent" /> 1. Video Import Section
+            </h2>
+
+            <button
+              onClick={() => setShowImportCard(false)}
+              className="p-1 rounded-md text-text-muted hover:text-danger hover:bg-surface-hover transition-all"
+              title="Close/Hide Import Section"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              className={`flex-1 w-full p-4 rounded-xl border-2 border-dashed flex items-center justify-between gap-4 transition-all ${
+                isDragging ? 'border-accent bg-accent/10' : 'border-text-primary/30 bg-surface'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-accent/20 border border-accent flex items-center justify-center text-accent shrink-0">
+                  <Video className="w-5 h-5" />
+                </div>
+                <div className="truncate">
+                  <h4 className="text-xs font-bold text-text-primary truncate">
+                    {videoFile ? videoFile.name : (videoUrl ? 'Video File Imported' : 'Drag & Drop Video File')}
+                  </h4>
+                  <p className="text-[11px] text-text-muted">
+                    {videoFile ? `${(videoFile.size / (1024 * 1024)).toFixed(1)} MB` : 'Supports MP4, MKV, MOV, WEBM'}
+                  </p>
+                </div>
+              </div>
+
+              <label className="px-4 py-2 text-xs font-bold text-white bg-accent hover:bg-accent-hover rounded-card border border-text-primary cursor-pointer shrink-0 shadow-neo-sm hover:scale-105 transition-all">
+                {videoUrl ? 'Change Video' : 'Browse Video'}
+                <input
+                  type="file"
+                  accept="video/*"
+                  onChange={handleFileInputChange}
+                  className="hidden"
+                />
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Grid Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column (Video Player & Realistic Smartphone Mockup Frame — 5 cols) */}
+        {/* Left Column — SECTION 2: SEPARATE DEDICATED PREVIEW DEVICES CARD (5 cols) */}
         <div className="lg:col-span-5 space-y-4">
           <div className="card-neo p-5 space-y-4">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
-                <FileVideo className="w-4 h-4 text-accent" /> Video Source & Preview Mode
+                <FileVideo className="w-4 h-4 text-accent" /> 2. Interactive Preview Device
               </h2>
 
               {/* Preview Frame Mode Switcher */}
@@ -525,7 +631,7 @@ export const VideoTrimmerView: React.FC = () => {
                   className={`px-2.5 py-1 rounded flex items-center gap-1 transition-all ${
                     previewFrame === 'mobile' ? 'bg-accent text-white font-bold shadow-sm' : 'text-text-secondary hover:text-text-primary'
                   }`}
-                  title="📱 Mobile 9:16 Vertical Smartphone View"
+                  title="📱 Mobile 9:16 Vertical View"
                 >
                   <Smartphone className="w-3.5 h-3.5" /> Mobile 9:16
                 </button>
@@ -534,7 +640,7 @@ export const VideoTrimmerView: React.FC = () => {
                   className={`px-2.5 py-1 rounded flex items-center gap-1 transition-all ${
                     previewFrame === 'desktop' ? 'bg-accent text-white font-bold shadow-sm' : 'text-text-secondary hover:text-text-primary'
                   }`}
-                  title="🖥️ Desktop 16:9 Widescreen View"
+                  title="🖥️ Desktop 16:9 View"
                 >
                   <Monitor className="w-3.5 h-3.5" /> 16:9 Desktop
                 </button>
@@ -543,7 +649,7 @@ export const VideoTrimmerView: React.FC = () => {
                   className={`px-2.5 py-1 rounded flex items-center gap-1 transition-all ${
                     previewFrame === 'square' ? 'bg-accent text-white font-bold shadow-sm' : 'text-text-secondary hover:text-text-primary'
                   }`}
-                  title="🔳 Square 1:1 Feed View"
+                  title="🔳 Square 1:1 View"
                 >
                   <Square className="w-3.5 h-3.5" /> 1:1 Square
                 </button>
@@ -566,17 +672,9 @@ export const VideoTrimmerView: React.FC = () => {
               </div>
             )}
 
-            {/* Single Persistent Video Container */}
-            <div
-              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={handleDrop}
-              className={`relative bg-neutral-950 rounded-xl overflow-hidden border-2 transition-all flex items-center justify-center min-h-[460px] ${
-                isDragging ? 'border-accent bg-accent/20 ring-4 ring-accent/30' : 'border-text-primary/40'
-              }`}
-            >
+            {/* Persistent Single Video Frame Container */}
+            <div className="relative bg-neutral-950 rounded-xl overflow-hidden border-2 border-text-primary/40 transition-all flex items-center justify-center min-h-[460px]">
               {currentVideoSrc ? (
-                /* Single Persistent Video Element across frame mode switches */
                 <div className="w-full flex items-center justify-center p-4">
                   <div
                     className={`transition-all duration-300 ${
@@ -589,12 +687,10 @@ export const VideoTrimmerView: React.FC = () => {
                   >
                     {previewFrame === 'mobile' && (
                       <>
-                        {/* Side Hardware Buttons */}
                         <span className="absolute -left-[12px] top-24 w-1 h-10 bg-neutral-700 rounded-l" />
                         <span className="absolute -left-[12px] top-38 w-1 h-10 bg-neutral-700 rounded-l" />
                         <span className="absolute -right-[12px] top-28 w-1 h-12 bg-neutral-700 rounded-r" />
 
-                        {/* Top Dynamic Island / Notch */}
                         <div className="absolute top-2.5 z-30 w-28 h-4 bg-black rounded-full flex items-center justify-center gap-2.5 border border-white/10 shadow-sm">
                           <span className="w-2 h-2 rounded-full bg-neutral-800" />
                           <span className="w-1.5 h-1.5 rounded-full bg-blue-900 animate-pulse" />
@@ -602,7 +698,6 @@ export const VideoTrimmerView: React.FC = () => {
                       </>
                     )}
 
-                    {/* Persistent Video Tag */}
                     <div className="w-full h-full bg-black flex items-center justify-center overflow-hidden relative">
                       <video
                         ref={videoRef}
@@ -625,34 +720,16 @@ export const VideoTrimmerView: React.FC = () => {
                   </div>
                 </div>
               ) : (
-                /* High-Contrast Dropzone */
-                <div className="text-center p-8 space-y-5">
-                  <div className="w-20 h-20 bg-accent/20 border-2 border-accent rounded-3xl flex items-center justify-center mx-auto text-accent shadow-neo-md animate-bounce">
-                    <Upload className="w-10 h-10" />
-                  </div>
-                  <div className="space-y-1">
-                    <h3 className="text-lg font-bold text-white tracking-wide">Drag & Drop Video File Here</h3>
-                    <p className="text-xs text-neutral-300">Supports MP4, MKV, MOV, WEBM, AVI video formats</p>
-                  </div>
-                  <div className="pt-2">
-                    <label className="bg-accent hover:bg-accent-hover text-white font-bold px-8 py-3.5 rounded-card border-2 border-white shadow-neo-md text-sm cursor-pointer inline-flex items-center gap-2.5 transition-all hover:scale-105 active:scale-95">
-                      <Video className="w-5 h-5 text-white" /> Browse Video File
-                      <input
-                        type="file"
-                        accept="video/*"
-                        onChange={handleFileInputChange}
-                        className="hidden"
-                      />
-                    </label>
-                  </div>
+                <div className="text-center p-8 space-y-4">
+                  <Video className="w-12 h-12 text-neutral-500 mx-auto" />
+                  <p className="text-xs text-neutral-400">Import a video above to display live preview</p>
                 </div>
               )}
             </div>
 
-            {/* Video Controls Bar */}
+            {/* Controls Bar */}
             {currentVideoSrc && (
               <div className="space-y-3">
-                {/* Seekbar & Timecode */}
                 <div className="space-y-1">
                   <input
                     type="range"
@@ -673,27 +750,14 @@ export const VideoTrimmerView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Transport Buttons & Speed Controls */}
                 <div className="flex items-center justify-between gap-2 pt-1">
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={togglePlay}
-                      className="p-2.5 rounded-lg bg-surface border-2 border-text-primary text-text-primary hover:text-accent hover:bg-surface-hover shadow-neo-sm transition-all"
-                    >
-                      {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
-                    </button>
-                    <label className="px-3.5 py-2 text-xs rounded-card bg-accent text-white font-bold border-2 border-text-primary cursor-pointer inline-flex items-center gap-1.5 shadow-neo-sm hover:scale-105 transition-all">
-                      <Upload className="w-3.5 h-3.5 text-white" /> Import Video
-                      <input
-                        type="file"
-                        accept="video/*"
-                        onChange={handleFileInputChange}
-                        className="hidden"
-                      />
-                    </label>
-                  </div>
+                  <button
+                    onClick={togglePlay}
+                    className="p-2.5 rounded-lg bg-surface border-2 border-text-primary text-text-primary hover:text-accent hover:bg-surface-hover shadow-neo-sm transition-all"
+                  >
+                    {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
+                  </button>
 
-                  {/* Playback Rate Selector */}
                   <div className="flex items-center gap-1 bg-surface p-1 rounded-lg border border-border text-[11px]">
                     {[0.5, 1.0, 1.5, 2.0].map((rate) => (
                       <button
@@ -711,11 +775,7 @@ export const VideoTrimmerView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Interactive Timestamp Marker Buttons */}
-                <div className="p-3.5 bg-surface rounded-card border-2 border-text-primary space-y-2 shadow-neo-sm">
-                  <div className="text-[11px] font-bold text-text-muted uppercase tracking-wider">
-                    Interactive Cursor Markers
-                  </div>
+                <div className="p-3 bg-surface rounded-card border-2 border-text-primary space-y-2 shadow-neo-sm">
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       onClick={handleSetStart}
@@ -730,32 +790,33 @@ export const VideoTrimmerView: React.FC = () => {
                       <Plus className="w-3.5 h-3.5 text-white" /> Set End & Add Clip
                     </button>
                   </div>
-                  {markerStart !== null && (
-                    <div className="text-[11px] text-accent font-mono flex items-center justify-between pt-1">
-                      <span>Active Start Marker: {formatShortTimecode(markerStart)}</span>
-                      <button
-                        onClick={() => setMarkerStart(null)}
-                        className="text-text-muted hover:text-danger underline"
-                      >
-                        Clear
-                      </button>
-                    </div>
-                  )}
                 </div>
               </div>
             )}
           </div>
         </div>
 
-        {/* Right Column (Timelines Input & 2K/4K Quality Controls — 7 cols) */}
+        {/* Right Column (Timelines Input, Clip Sequence & Output Results — 7 cols) */}
         <div className="lg:col-span-7 space-y-4">
-          {/* Export Quality & Aspect Fitting Settings Panel */}
+          {/* Export Quality Settings Panel */}
           <div className="card-neo p-5 space-y-3">
             <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider flex items-center gap-2 border-b border-border pb-2">
-              <Zap className="w-4 h-4 text-accent" /> Export Quality & Mobile Fitting
+              <Zap className="w-4 h-4 text-accent" /> Aspect Fitting & Export Quality
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-              {/* Resolution Selector */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-text-primary">Mobile Aspect Fitting:</label>
+                <select
+                  value={aspectFit}
+                  onChange={(e) => setAspectFit(e.target.value as AspectFitMode)}
+                  className="w-full p-2.5 bg-surface rounded-input border-2 border-text-primary text-xs text-text-primary focus:outline-none focus:border-accent font-bold shadow-neo-sm"
+                >
+                  <option value="mobile_9_16">📱 9:16 Vertical Shorts Crop</option>
+                  <option value="original">🖥️ Widescreen 16:9 Original</option>
+                  <option value="square_1_1">🔳 Square 1:1 Feed Post</option>
+                </select>
+              </div>
+
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-text-primary">Export Resolution:</label>
                 <select
@@ -765,172 +826,167 @@ export const VideoTrimmerView: React.FC = () => {
                 >
                   <option value="original">⚡ Original (Instant Stream Copy - 0 Sec)</option>
                   <option value="1080p">📺 1080p Full HD</option>
-                  <option value="2k">🚀 2K QHD (2560x1440 / 1440x2560 60fps)</option>
-                  <option value="4k">🌟 4K UHD (3840x2160 / 2160x3840 Ultra-Sharp)</option>
-                </select>
-              </div>
-
-              {/* Aspect Ratio Mode Selector */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-text-primary">Mobile Aspect Fitting:</label>
-                <select
-                  value={aspectFit}
-                  onChange={(e) => setAspectFit(e.target.value as AspectFitMode)}
-                  className="w-full p-2.5 bg-surface rounded-input border-2 border-text-primary text-xs text-text-primary focus:outline-none focus:border-accent font-bold shadow-neo-sm"
-                >
-                  <option value="mobile_9_16">📱 9:16 Vertical Short (Fill & Center Crop)</option>
-                  <option value="original">🖥️ Widescreen 16:9 Original</option>
-                  <option value="square_1_1">🔳 Square 1:1 Feed Post</option>
+                  <option value="2k">🚀 2K QHD (2560x1440 60fps)</option>
+                  <option value="4k">🌟 4K UHD (3840x2160 Ultra-Sharp)</option>
                 </select>
               </div>
             </div>
           </div>
 
-          {/* Timeline Input Textarea */}
-          <div className="card-neo p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
-                <Layers className="w-4 h-4 text-accent" /> Batch Timestamp Ranges (Paste Text)
-              </h2>
-              <span className="text-xs text-text-muted font-mono font-bold">
-                {segments.length} clip(s) detected
-              </span>
-            </div>
-
-            <textarea
-              rows={4}
-              value={rawText}
-              onChange={(e) => setRawText(e.target.value)}
-              placeholder="Paste timelines here (one range per line):\n0:0:1:45-0:0:2:45\n0:1:1:45-0:1:2:45\n00:02:10.500 - 00:02:35.000"
-              className="w-full p-3 bg-surface rounded-input border-2 border-text-primary font-mono text-xs text-text-primary focus:outline-none focus:border-accent leading-relaxed shadow-neo-sm"
-            />
-            <p className="text-[11px] text-text-muted">
-              Supported formats: <code className="text-accent font-mono">0:0:1:45-0:0:2:45</code> (H:M:S:MS), <code className="text-accent font-mono">00:01:15.500-00:01:30.000</code>, <code className="text-accent font-mono">1:15-2:00</code> (M:S).
-            </p>
-          </div>
-
-          {/* Structured Numbered Sequence Clip Cards List (#1, #2, #3...) */}
-          <div className="card-neo p-5 space-y-4">
-            <div className="flex items-center justify-between border-b border-border pb-3">
-              <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
-                <Film className="w-4 h-4 text-accent" /> Ordered Clip Sequence
-              </h2>
-              {segments.length > 0 && (
-                <button
-                  onClick={() => setRawText('')}
-                  className="text-xs text-text-muted hover:text-danger flex items-center gap-1 transition-all"
-                >
-                  <Trash2 className="w-3.5 h-3.5" /> Clear All
-                </button>
-              )}
-            </div>
-
-            {segments.length === 0 ? (
-              <div className="text-center py-8 text-text-muted space-y-2">
-                <Scissors className="w-8 h-8 text-text-muted mx-auto opacity-50" />
-                <p className="text-xs font-semibold">No valid timestamp ranges entered yet.</p>
-                <p className="text-[11px]">Type or paste ranges in the text box above to generate numbered clips!</p>
-              </div>
-            ) : (
-              <div className="space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
-                {segments.map((seg, idx) => (
-                  <div
-                    key={seg.id}
-                    className="p-3 bg-surface rounded-lg border-2 border-border flex items-center justify-between gap-3 hover:border-accent transition-all shadow-neo-sm group"
+          {/* ─── PERSISTENT TIMELINE EDITOR CARD (WITH [X] DISMISS BUTTON) ─── */}
+          {showTimelineEditor && (
+            <div className="card-neo p-5 space-y-3 relative">
+              <div className="flex items-center justify-between border-b border-border pb-2">
+                <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-accent" /> Batch Timestamp Ranges (Persistent Text)
+                </h2>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-text-muted font-mono font-bold">
+                    {segments.length} clip(s) detected
+                  </span>
+                  <button
+                    onClick={() => setShowTimelineEditor(false)}
+                    className="p-1 rounded-md text-text-muted hover:text-danger hover:bg-surface-hover transition-all"
+                    title="Dismiss Timeline Editor"
                   >
-                    {/* Number Badge & Clip Info */}
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded-lg bg-accent text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-sm">
-                        #{seg.index}
-                      </div>
-                      <div className="truncate">
-                        <div className="font-mono text-xs font-semibold text-text-primary flex items-center gap-2">
-                          <span>{seg.formattedStart}</span>
-                          <span className="text-text-muted">→</span>
-                          <span>{seg.formattedEnd}</span>
-                        </div>
-                        <div className="text-[11px] text-text-muted mt-0.5 flex items-center gap-2">
-                          <span>Duration: <strong className="text-text-primary font-mono">{seg.formattedDuration}</strong></span>
-                          <span className="text-border">|</span>
-                          <span className="font-mono opacity-60">Raw: {seg.rawInput}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Action Buttons */}
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        onClick={() => previewSegment(seg)}
-                        className="px-2.5 py-1.5 rounded-md bg-accent/10 border border-accent/30 text-xs font-bold text-accent hover:bg-accent hover:text-white flex items-center gap-1 transition-all"
-                        title="Preview clip range in video player"
-                      >
-                        <Play className="w-3 h-3 fill-current" /> Preview Clip
-                      </button>
-                      <button
-                        onClick={() => moveSegment(idx, 'up')}
-                        disabled={idx === 0}
-                        className="p-1.5 rounded bg-surface border border-border text-text-muted hover:text-text-primary disabled:opacity-30"
-                        title="Move Clip Up"
-                      >
-                        <ArrowUp className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => moveSegment(idx, 'down')}
-                        disabled={idx === segments.length - 1}
-                        className="p-1.5 rounded bg-surface border border-border text-text-muted hover:text-text-primary disabled:opacity-30"
-                        title="Move Clip Down"
-                      >
-                        <ArrowDown className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => deleteSegment(idx)}
-                        className="p-1.5 rounded bg-surface border border-border text-text-muted hover:text-danger hover:border-danger/40 transition-all"
-                        title="Delete Clip"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-            )}
 
-            {/* Trimming Options & VIBRANT ACCENT BLUE START BUTTON */}
-            <div className="pt-3 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4">
-              <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-text-secondary select-none">
-                <input
-                  type="checkbox"
-                  checked={mergeAll}
-                  onChange={(e) => setMergeAll(e.target.checked)}
-                  className="rounded border-border text-accent focus:ring-accent"
-                />
-                <span>Also merge all trimmed clips into 1 combined video reel</span>
-              </label>
-
-              {/* 100% VIBRANT ACCENT BLUE ALWAYS-ACTIVE START BUTTON */}
-              <button
-                onClick={handleStartTrimming}
-                className="w-full sm:w-auto px-7 py-3 text-xs font-bold text-white rounded-card bg-accent hover:bg-accent-hover border-2 border-text-primary shadow-neo-md hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2.5 cursor-pointer"
-              >
-                {isTrimming ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin text-white" /> Rendering ({exportQuality.toUpperCase()})...
-                  </>
-                ) : (
-                  <>
-                    <Scissors className="w-4 h-4 text-white" /> Start Trimming ({segments.length} Clips)
-                  </>
-                )}
-              </button>
+              <textarea
+                rows={4}
+                value={rawText}
+                onChange={(e) => setRawText(e.target.value)}
+                placeholder="Paste timelines here:\n0:0:1:45-0:0:2:45\n0:1:1:45-0:1:2:45"
+                className="w-full p-3 bg-surface rounded-input border-2 border-text-primary font-mono text-xs text-text-primary focus:outline-none focus:border-accent leading-relaxed shadow-neo-sm"
+              />
             </div>
-          </div>
+          )}
 
-          {/* Generated Results Section & ZIP Export */}
-          {trimmedResults.length > 0 && (
-            <div className="card-neo p-5 space-y-4 bg-accent/5 border-accent/30">
+          {/* ─── PERSISTENT ORDERED CLIP SEQUENCE CARD (WITH [X] DISMISS BUTTON) ─── */}
+          {showClipSequence && (
+            <div className="card-neo p-5 space-y-4 relative">
+              <div className="flex items-center justify-between border-b border-border pb-3">
+                <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
+                  <Film className="w-4 h-4 text-accent" /> Numbered Clip Sequence
+                </h2>
+                <div className="flex items-center gap-2">
+                  {segments.length > 0 && (
+                    <button
+                      onClick={() => setRawText('')}
+                      className="text-xs text-text-muted hover:text-danger flex items-center gap-1 transition-all"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> Clear All
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowClipSequence(false)}
+                    className="p-1 rounded-md text-text-muted hover:text-danger hover:bg-surface-hover transition-all"
+                    title="Dismiss Clip Sequence"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {segments.length === 0 ? (
+                <div className="text-center py-6 text-text-muted space-y-1">
+                  <Scissors className="w-6 h-6 text-text-muted mx-auto opacity-50" />
+                  <p className="text-xs font-semibold">No timestamp ranges entered yet.</p>
+                </div>
+              ) : (
+                <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
+                  {segments.map((seg, idx) => (
+                    <div
+                      key={seg.id}
+                      className="p-3 bg-surface rounded-lg border-2 border-border flex items-center justify-between gap-3 hover:border-accent transition-all shadow-neo-sm group"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-8 h-8 rounded-lg bg-accent text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-sm">
+                          #{seg.index}
+                        </div>
+                        <div className="truncate">
+                          <div className="font-mono text-xs font-semibold text-text-primary flex items-center gap-2">
+                            <span>{seg.formattedStart}</span>
+                            <span className="text-text-muted">→</span>
+                            <span>{seg.formattedEnd}</span>
+                          </div>
+                          <div className="text-[11px] text-text-muted mt-0.5">
+                            Duration: <strong className="text-text-primary font-mono">{seg.formattedDuration}</strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => previewSegment(seg)}
+                          className="px-2.5 py-1.5 rounded-md bg-accent/10 border border-accent/30 text-xs font-bold text-accent hover:bg-accent hover:text-white flex items-center gap-1 transition-all"
+                        >
+                          <Play className="w-3 h-3 fill-current" /> Preview Clip
+                        </button>
+                        <button
+                          onClick={() => moveSegment(idx, 'up')}
+                          disabled={idx === 0}
+                          className="p-1 rounded bg-surface border border-border text-text-muted hover:text-text-primary disabled:opacity-30"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => moveSegment(idx, 'down')}
+                          disabled={idx === segments.length - 1}
+                          className="p-1 rounded bg-surface border border-border text-text-muted hover:text-text-primary disabled:opacity-30"
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => deleteSegment(idx)}
+                          className="p-1 rounded bg-surface border border-border text-text-muted hover:text-danger hover:border-danger/40 transition-all"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* VIBRANT ACCENT BLUE START TRIMMING BUTTON */}
+              <div className="pt-3 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4">
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-text-secondary select-none">
+                  <input
+                    type="checkbox"
+                    checked={mergeAll}
+                    onChange={(e) => setMergeAll(e.target.checked)}
+                    className="rounded border-border text-accent focus:ring-accent"
+                  />
+                  <span>Merge all clips into 1 reel</span>
+                </label>
+
+                <button
+                  onClick={handleStartTrimming}
+                  className="w-full sm:w-auto px-7 py-3 text-xs font-bold text-white rounded-card bg-accent hover:bg-accent-hover border-2 border-text-primary shadow-neo-md hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2.5 cursor-pointer"
+                >
+                  {isTrimming ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin text-white" /> Rendering ({exportQuality.toUpperCase()})...
+                    </>
+                  ) : (
+                    <>
+                      <Scissors className="w-4 h-4 text-white" /> Start Trimming ({segments.length} Clips)
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ─── PERSISTENT GENERATED RESULTS PANEL (WITH [X] DISMISS & INDIVIDUAL CLIP CROSSED) ─── */}
+          {showResultsPanel && trimmedResults.length > 0 && (
+            <div className="card-neo p-5 space-y-4 bg-accent/5 border-accent/30 relative">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3">
                 <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-success" /> Generated Clips ({trimmedResults.length})
+                  <CheckCircle2 className="w-4 h-4 text-success" /> Persistent Output Results ({trimmedResults.length})
                 </h2>
 
                 <div className="flex items-center gap-2">
@@ -940,7 +996,7 @@ export const VideoTrimmerView: React.FC = () => {
                     className="px-4 py-2 text-xs font-bold text-white bg-accent border-2 border-text-primary rounded-card shadow-neo-sm hover:scale-105 transition-all flex items-center gap-1.5"
                   >
                     {isZipping ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Archive className="w-3.5 h-3.5" />}
-                    Download All as ZIP
+                    Download ZIP
                   </button>
 
                   {combinedUrl && (
@@ -949,9 +1005,17 @@ export const VideoTrimmerView: React.FC = () => {
                       download
                       className="btn-neo-secondary px-3.5 py-1.5 text-xs flex items-center gap-1.5 text-accent font-bold"
                     >
-                      <Download className="w-3.5 h-3.5" /> Download Merged Reel
+                      <Download className="w-3.5 h-3.5" /> Download Reel
                     </a>
                   )}
+
+                  <button
+                    onClick={() => setShowResultsPanel(false)}
+                    className="p-1 rounded-md text-text-muted hover:text-danger hover:bg-surface-hover transition-all"
+                    title="Dismiss Results Panel"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
 
@@ -959,9 +1023,17 @@ export const VideoTrimmerView: React.FC = () => {
                 {trimmedResults.map((clip) => (
                   <div
                     key={clip.clip_number}
-                    className="p-3 bg-surface rounded-lg border-2 border-border space-y-2 shadow-neo-sm"
+                    className="p-3 bg-surface rounded-lg border-2 border-border space-y-2 shadow-neo-sm relative group"
                   >
-                    <div className="flex items-center justify-between">
+                    <button
+                      onClick={() => removeResultClip(clip.clip_number)}
+                      className="absolute top-2 right-2 p-1 text-text-muted hover:text-danger rounded transition-all"
+                      title="Remove Clip from Results"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+
+                    <div className="flex items-center justify-between pr-5">
                       <span className="font-bold text-xs text-accent">
                         Clip #{clip.clip_number}
                       </span>

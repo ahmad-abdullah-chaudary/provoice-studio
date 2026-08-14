@@ -289,8 +289,8 @@ class VideoSyncEngine:
 
             success = False
 
-            # ALWAYS try fast stream copy first for 0-second instant trimming (unless custom scaling filter is requested)
-            if not vf_filter or export_quality == "original":
+            # Fast stream copy (instant) when original aspect ratio is preserved
+            if aspect_fit == "original" and export_quality == "original":
                 cmd_copy = [
                     "ffmpeg", "-y",
                     "-ss", f"{start_sec:.3f}",
