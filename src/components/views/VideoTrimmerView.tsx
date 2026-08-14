@@ -4,7 +4,8 @@ import {
   Scissors, Upload, Play, Pause, Download, Trash2,
   Plus, Clock, ArrowUp, ArrowDown, Film, CheckCircle2,
   Sparkles, RefreshCw, FileVideo, Layers, Video, Smartphone, Monitor, Square,
-  Zap, Archive, Eye, RotateCcw, X, FileText, ShieldAlert, Sliders, ChevronDown, ChevronUp
+  Zap, Archive, Eye, RotateCcw, X, FileText, ShieldAlert, Sliders, ChevronDown, ChevronUp,
+  FlipHorizontal, ZoomIn, Sun, RotateCw, Volume2, Music, Radio, Palette, Check
 } from 'lucide-react';
 
 interface ClipSegment {
@@ -1252,76 +1253,97 @@ export const VideoTrimmerView: React.FC = () => {
       </div>
 
       {/* ─── COPYRIGHT BYPASS SECTION ─── */}
-      <div className="card-neo p-5 space-y-5 border-2 border-accent/30 bg-accent/5">
+      <div className="card-neo p-6 space-y-6">
         <div
-          className="flex items-center justify-between cursor-pointer"
+          className="flex items-center justify-between cursor-pointer select-none"
           onClick={() => setShowBypassPanel(!showBypassPanel)}
         >
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center">
-              <ShieldAlert className="w-4 h-4 text-white" />
+            <div className="w-10 h-10 rounded-xl bg-accent/10 border border-accent/30 flex items-center justify-center text-accent">
+              <ShieldAlert className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
-                Copyright Bypass Engine
-                <span className="px-2 py-0.5 text-[10px] font-bold bg-accent text-white rounded-full">18 Transforms</span>
-              </h2>
-              <p className="text-[11px] text-text-muted">Visual + Audio FFmpeg transformations to defeat fingerprinting algorithms</p>
+              <div className="flex items-center gap-2.5">
+                <h2 className="text-sm font-bold text-text-primary tracking-tight">
+                  Copyright Bypass Engine
+                </h2>
+                <span className="px-2.5 py-0.5 text-[10px] font-bold bg-accent text-white rounded-full shadow-sm">
+                  18 Transforms
+                </span>
+              </div>
+              <p className="text-xs text-text-muted mt-0.5">
+                Anti-fingerprint visual & audio transformations powered by FFmpeg
+              </p>
             </div>
           </div>
-          <button className="p-1.5 rounded-lg bg-surface border border-border text-text-muted hover:text-accent transition-all">
+          <button className="btn-neo-secondary p-2 rounded-xl text-text-secondary hover:text-accent transition-all">
             {showBypassPanel ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </button>
         </div>
 
         {showBypassPanel && (
-          <div className="space-y-5 pt-2">
+          <div className="space-y-6 pt-1">
             {/* Preset Profile Selector */}
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               <label className="text-xs font-bold text-text-primary uppercase tracking-wider flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-accent" /> One-Click Preset Profiles
+                <Sparkles className="w-3.5 h-3.5 text-accent" /> One-Click Presets
               </label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {[
-                  { id: 'light', label: '🔵 Light (Subtle)', desc: 'Flip + Hue 10° + Pitch ±2st' },
-                  { id: 'medium', label: '🟡 Medium', desc: 'Zoom 1.03x + Color Grade + Pitch ±3st' },
-                  { id: 'heavy', label: '🔴 Heavy (Max)', desc: 'Flip + Zoom + Blur + Pitch ±5st + Noise' },
-                  { id: 'cinematic', label: '🎨 Cinematic', desc: 'LUT Grade + Letterbox + Reverb' },
-                ].map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => applyBypassPreset(p.id)}
-                    className={`p-3 rounded-lg border-2 text-left transition-all space-y-1 ${
-                      bypassProfile === p.id
-                        ? 'border-accent bg-accent/10 shadow-sm'
-                        : 'border-border bg-surface hover:border-accent/50'
-                    }`}
-                  >
-                    <div className="text-xs font-bold text-text-primary">{p.label}</div>
-                    <div className="text-[10px] text-text-muted">{p.desc}</div>
-                  </button>
-                ))}
+                  { id: 'light', label: 'Light', tag: 'Subtle', desc: 'Flip + Hue 10° + Pitch ±2st' },
+                  { id: 'medium', label: 'Medium', tag: 'Standard', desc: 'Zoom 1.03x + Color Grade + Pitch ±3st' },
+                  { id: 'heavy', label: 'Heavy', tag: 'Maximum', desc: 'Flip + Zoom + Blur + Pitch ±5st + Dither' },
+                  { id: 'cinematic', label: 'Cinematic', tag: 'Color LUT', desc: 'LUT Grade + Letterbox + Reverb' },
+                ].map((p) => {
+                  const isActive = bypassProfile === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => applyBypassPreset(p.id)}
+                      className={`p-3.5 rounded-xl border-2 text-left transition-all space-y-1.5 ${
+                        isActive
+                          ? 'border-accent bg-accent/5 shadow-neo-sm'
+                          : 'border-border/80 bg-surface hover:border-accent/40'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-text-primary">{p.label}</span>
+                        {isActive ? (
+                          <span className="w-4 h-4 rounded-full bg-accent text-white flex items-center justify-center text-[10px]">
+                            <Check className="w-3 h-3 stroke-[3]" />
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-mono text-text-muted px-1.5 py-0.5 rounded bg-surface-hover">
+                            {p.tag}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-text-muted leading-tight">{p.desc}</div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Individual Toggles Grid */}
-            <div className="space-y-3">
+            {/* Visual Transformations */}
+            <div className="space-y-2.5">
               <label className="text-xs font-bold text-text-primary uppercase tracking-wider flex items-center gap-1.5">
                 <Sliders className="w-3.5 h-3.5 text-accent" /> Visual Transformations
               </label>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                 {[
-                  { key: 'flip', label: 'Horizontal Flip', type: 'bool' },
-                  { key: 'zoom', label: 'Zoom 1.03x', type: 'num', val: 1.03, off: 0 },
-                  { key: 'hue', label: 'Hue Shift +15°', type: 'num', val: 15, off: 0 },
-                  { key: 'saturation', label: 'Saturation +15%', type: 'num', val: 1.15, off: 1.0 },
-                  { key: 'brightness', label: 'Brightness +5%', type: 'num', val: 0.05, off: 0 },
-                  { key: 'contrast', label: 'Contrast +5%', type: 'num', val: 1.05, off: 1.0 },
-                  { key: 'rotation', label: 'Rotation 0.8°', type: 'num', val: 0.8, off: 0 },
-                  { key: 'blur', label: 'Blur 0.3px', type: 'num', val: 0.3, off: 0 },
-                  { key: 'letterbox', label: 'Letterbox', type: 'bool' },
-                  { key: 'color_grade', label: 'Color Grade (LUT)', type: 'bool' },
+                  { key: 'flip', label: 'Horizontal Flip', icon: FlipHorizontal, type: 'bool' },
+                  { key: 'zoom', label: 'Zoom 1.03x', icon: ZoomIn, type: 'num', val: 1.03, off: 0 },
+                  { key: 'hue', label: 'Hue Shift +15°', icon: Palette, type: 'num', val: 15, off: 0 },
+                  { key: 'saturation', label: 'Saturation +15%', icon: Sun, type: 'num', val: 1.15, off: 1.0 },
+                  { key: 'brightness', label: 'Brightness +5%', icon: Sun, type: 'num', val: 0.05, off: 0 },
+                  { key: 'contrast', label: 'Contrast +5%', icon: Sliders, type: 'num', val: 1.05, off: 1.0 },
+                  { key: 'rotation', label: 'Rotation 0.8°', icon: RotateCw, type: 'num', val: 0.8, off: 0 },
+                  { key: 'blur', label: 'Blur 0.3px', icon: Sparkles, type: 'num', val: 0.3, off: 0 },
+                  { key: 'letterbox', label: 'Letterbox Bars', icon: Film, type: 'bool' },
+                  { key: 'color_grade', label: 'Cinematic LUT', icon: Palette, type: 'bool' },
                 ].map((item) => {
+                  const IconComponent = item.icon;
                   const isOn = item.type === 'bool'
                     ? !!bypassSettings[item.key]
                     : bypassSettings[item.key] !== (item as any).off;
@@ -1337,67 +1359,81 @@ export const VideoTrimmerView: React.FC = () => {
                             : (item.type === 'bool' ? true : (item as any).val),
                         }));
                       }}
-                      className={`p-2.5 rounded-lg border-2 text-xs font-semibold text-left transition-all ${
-                        isOn ? 'border-accent bg-accent/10 text-accent font-bold' : 'border-border bg-surface text-text-muted hover:border-accent/40'
+                      className={`px-3 py-2.5 rounded-xl border-2 text-xs font-semibold flex items-center justify-between gap-2 transition-all ${
+                        isOn
+                          ? 'border-accent bg-accent text-white shadow-neo-sm'
+                          : 'border-border/80 bg-surface text-text-secondary hover:border-accent/40'
                       }`}
                     >
-                      <span className="block text-base mb-0.5">{isOn ? '✅' : '⬜'}</span>
-                      {item.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <label className="text-xs font-bold text-text-primary uppercase tracking-wider flex items-center gap-1.5 pt-1">
-                <Zap className="w-3.5 h-3.5 text-accent" /> Audio Transformations
-              </label>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                {[
-                  { key: 'pitch_semitones', label: 'Pitch Shift +3st', type: 'num', val: 3, off: 0 },
-                  { key: 'speed', label: 'Speed +3%', type: 'num', val: 1.03, off: 1.0 },
-                  { key: 'bg_noise', label: 'BG Noise Layer', type: 'bool' },
-                  { key: 'eq_lowpass', label: 'EQ / Low-pass', type: 'bool' },
-                  { key: 'normalize', label: 'Vol. Normalize', type: 'bool' },
-                  { key: 'stereo_remix', label: 'Stereo Remix', type: 'bool' },
-                  { key: 'reverb', label: 'Subtle Reverb', type: 'bool' },
-                ].map((item) => {
-                  const isOn = item.type === 'bool'
-                    ? !!bypassSettings[item.key]
-                    : bypassSettings[item.key] !== (item as any).off;
-                  return (
-                    <button
-                      key={item.key}
-                      onClick={() => {
-                        setBypassProfile('custom');
-                        setBypassSettings((prev) => ({
-                          ...prev,
-                          [item.key]: isOn
-                            ? (item.type === 'bool' ? false : (item as any).off)
-                            : (item.type === 'bool' ? true : (item as any).val),
-                        }));
-                      }}
-                      className={`p-2.5 rounded-lg border-2 text-xs font-semibold text-left transition-all ${
-                        isOn ? 'border-accent bg-accent/10 text-accent font-bold' : 'border-border bg-surface text-text-muted hover:border-accent/40'
-                      }`}
-                    >
-                      <span className="block text-base mb-0.5">{isOn ? '✅' : '⬜'}</span>
-                      {item.label}
+                      <div className="flex items-center gap-2 truncate">
+                        <IconComponent className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                        <span className="truncate">{item.label}</span>
+                      </div>
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${isOn ? 'bg-white' : 'bg-border'}`} />
                     </button>
                   );
                 })}
               </div>
             </div>
 
-            {/* Action Row */}
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-3 border-t border-border">
-              <div className="text-xs text-text-muted flex items-start gap-2 max-w-md">
-                <ShieldAlert className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+            {/* Audio Transformations */}
+            <div className="space-y-2.5">
+              <label className="text-xs font-bold text-text-primary uppercase tracking-wider flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5 text-accent" /> Audio Transformations
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                {[
+                  { key: 'pitch_semitones', label: 'Pitch Shift +3st', icon: Music, type: 'num', val: 3, off: 0 },
+                  { key: 'speed', label: 'Speed +3%', icon: Clock, type: 'num', val: 1.03, off: 1.0 },
+                  { key: 'bg_noise', label: 'Audio Dither', icon: Radio, type: 'bool' },
+                  { key: 'eq_lowpass', label: 'EQ Filter (12kHz)', icon: Sliders, type: 'bool' },
+                  { key: 'normalize', label: 'Loudness Normalizer', icon: Volume2, type: 'bool' },
+                  { key: 'stereo_remix', label: 'Stereo Field Remix', icon: Radio, type: 'bool' },
+                  { key: 'reverb', label: 'Subtle Room Reverb', icon: Music, type: 'bool' },
+                ].map((item) => {
+                  const IconComponent = item.icon;
+                  const isOn = item.type === 'bool'
+                    ? !!bypassSettings[item.key]
+                    : bypassSettings[item.key] !== (item as any).off;
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={() => {
+                        setBypassProfile('custom');
+                        setBypassSettings((prev) => ({
+                          ...prev,
+                          [item.key]: isOn
+                            ? (item.type === 'bool' ? false : (item as any).off)
+                            : (item.type === 'bool' ? true : (item as any).val),
+                        }));
+                      }}
+                      className={`px-3 py-2.5 rounded-xl border-2 text-xs font-semibold flex items-center justify-between gap-2 transition-all ${
+                        isOn
+                          ? 'border-accent bg-accent text-white shadow-neo-sm'
+                          : 'border-border/80 bg-surface text-text-secondary hover:border-accent/40'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <IconComponent className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                        <span className="truncate">{item.label}</span>
+                      </div>
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${isOn ? 'bg-white' : 'bg-border'}`} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Action Bar */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-xl bg-surface-hover/50 border border-border">
+              <div className="text-xs text-text-muted flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 text-accent shrink-0" />
                 <span>
-                  Preset <strong className="text-text-primary uppercase font-bold">{bypassProfile}</strong> + selected transforms will be applied to your video using FFmpeg.
+                  Active preset: <strong className="text-text-primary uppercase font-bold">{bypassProfile}</strong>
                 </span>
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2.5 w-full sm:w-auto">
                 <button
                   onClick={async () => {
                     setIsBypassing(true);
@@ -1438,10 +1474,10 @@ export const VideoTrimmerView: React.FC = () => {
                       setIsBypassing(false);
                     }
                   }}
-                  className="px-5 py-2.5 text-xs font-bold text-white rounded-card bg-accent hover:bg-accent-hover border-2 border-text-primary shadow-neo-md hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
+                  className="btn-neo flex-1 sm:flex-none px-5 py-2.5 text-xs font-bold flex items-center justify-center gap-2"
                 >
                   {isBypassing ? (
-                    <><RefreshCw className="w-4 h-4 animate-spin" /> Rendering Preview (15s)...</>
+                    <><RefreshCw className="w-4 h-4 animate-spin" /> Rendering...</>
                   ) : (
                     <><Zap className="w-4 h-4" /> ⚡ Instant Render (15s Sample)</>
                   )}
@@ -1486,7 +1522,7 @@ export const VideoTrimmerView: React.FC = () => {
                       setIsBypassing(false);
                     }
                   }}
-                  className="px-4 py-2.5 text-xs font-bold text-text-primary rounded-card bg-surface hover:bg-surface-hover border-2 border-border shadow-neo-sm hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
+                  className="btn-neo-secondary flex-1 sm:flex-none px-4 py-2.5 text-xs font-bold flex items-center justify-center gap-2"
                 >
                   <Film className="w-3.5 h-3.5" /> Full Video
                 </button>
@@ -1494,18 +1530,18 @@ export const VideoTrimmerView: React.FC = () => {
             </div>
 
             {/* ─── ALWAYS-VISIBLE BEFORE & AFTER COMPARISON PREVIEW ─── */}
-            <div className="space-y-3 pt-3 border-t border-border">
+            <div className="space-y-3 pt-2">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
                   <Eye className="w-4 h-4 text-accent" /> Before vs After Comparison
                 </h3>
                 <div className="flex items-center gap-2 text-xs">
-                  <span className="text-text-muted text-[11px]">Real-time Live Preview:</span>
+                  <span className="text-text-muted text-[11px]">Real-time Preview:</span>
                   <button
                     onClick={() => setLiveSimulate(!liveSimulate)}
-                    className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all ${
+                    className={`px-3 py-1 rounded-lg text-[11px] font-bold border transition-all ${
                       liveSimulate
-                        ? 'bg-accent text-white border-text-primary shadow-sm'
+                        ? 'bg-accent text-white border-accent shadow-sm'
                         : 'bg-surface text-text-secondary border-border hover:text-text-primary'
                     }`}
                   >
@@ -1516,12 +1552,12 @@ export const VideoTrimmerView: React.FC = () => {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* BEFORE (ORIGINAL) */}
-                <div className="space-y-2 p-3 bg-surface rounded-xl border-2 border-border">
+                <div className="space-y-2 p-3.5 bg-surface rounded-xl border border-border shadow-sm">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-bold text-text-primary uppercase tracking-wider flex items-center gap-1.5">
                       🎬 Before (Original Raw Video)
                     </span>
-                    <span className="text-[10px] px-2 py-0.5 rounded bg-surface-hover text-text-muted font-mono">
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-surface-hover text-text-muted font-mono">
                       No Filters
                     </span>
                   </div>
@@ -1543,23 +1579,23 @@ export const VideoTrimmerView: React.FC = () => {
                 </div>
 
                 {/* AFTER (TRANSFORMED / LIVE SIMULATION) */}
-                <div className="space-y-2 p-3 bg-surface rounded-xl border-2 border-accent/40 bg-accent/5">
+                <div className="space-y-2 p-3.5 bg-surface rounded-xl border-2 border-accent/40 shadow-sm">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-bold text-accent uppercase tracking-wider flex items-center gap-1.5">
-                      ✨ After {bypassAfterUrl ? '(Rendered Output Video)' : '(Live Filter Simulation)'}
+                      ✨ After {bypassAfterUrl ? '(Rendered Output Video)' : '(Live Simulation)'}
                     </span>
                     {bypassAfterUrl ? (
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-accent text-white font-bold">
+                      <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-accent text-white font-bold shadow-sm">
                         FFmpeg Rendered
                       </span>
                     ) : (
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-accent/20 text-accent font-bold">
+                      <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-accent/15 text-accent font-bold">
                         Simulated Preview
                       </span>
                     )}
                   </div>
 
-                  <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-accent/50">
+                  <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border border-accent/40">
                     {bypassAfterUrl ? (
                       <video
                         src={bypassAfterUrl}
@@ -1578,7 +1614,7 @@ export const VideoTrimmerView: React.FC = () => {
                           muted
                         />
                         {liveSimulate && (
-                          <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/70 text-[10px] font-bold text-accent border border-accent/40 backdrop-blur-sm pointer-events-none">
+                          <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-bold text-accent border border-accent/40 backdrop-blur-sm pointer-events-none">
                             Live Visual Preview
                           </div>
                         )}
@@ -1595,7 +1631,7 @@ export const VideoTrimmerView: React.FC = () => {
                     <a
                       href={bypassResult.download_url}
                       download
-                      className="btn-neo-primary w-full py-2.5 text-xs font-bold flex items-center justify-center gap-2 mt-2 shadow-sm"
+                      className="btn-neo w-full py-2.5 text-xs font-bold flex items-center justify-center gap-2 mt-2 shadow-sm"
                     >
                       <Download className="w-3.5 h-3.5" /> Download Bypassed Video ({bypassResult.filename})
                     </a>
