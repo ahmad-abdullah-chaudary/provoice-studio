@@ -478,6 +478,236 @@ class VideoSyncEngine:
             print(f"[VideoEngine] Zip creation error: {e}")
             return False
 
+    # ─── Copyright Bypass Engine ────────────────────────────────────────────
+
+    @staticmethod
+    def build_bypass_filters(settings: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Build FFmpeg -vf and -af filter chains from a copyright bypass settings dict.
+        Returns (video_filter_string, audio_filter_string) — either may be None.
+        """
+        vf_parts = []
+        af_parts = []
+
+        # ── Visual Filters ──────────────────────────────────────────────────
+
+        # Horizontal Flip
+        if settings.get("flip"):
+            vf_parts.append("hflip")
+
+        # Slight Zoom (1.02x - 1.05x)
+        zoom = float(settings.get("zoom", 0))
+        if zoom > 0:
+            zoom = max(1.01, min(1.08, zoom))
+            # Scale up then crop back to original size
+            vf_parts.append(f"scale=iw*{zoom:.3f}:ih*{zoom:.3f},crop=iw/{zoom:.3f}:ih/{zoom:.3f}")
+
+        # Hue Shift (degrees, -30 to +30)
+        hue = float(settings.get("hue", 0))
+        if hue != 0:
+            vf_parts.append(f"hue=h={hue:.1f}")
+
+        # Saturation adjustment (0.5 to 2.0, 1.0 = no change)
+        saturation = float(settings.get("saturation", 1.0))
+        if abs(saturation - 1.0) > 0.01:
+            sat_clamped = max(0.5, min(2.0, saturation))
+            vf_parts.append(f"hue=s={sat_clamped:.2f}")
+
+        # Brightness & Contrast
+        brightness = float(settings.get("brightness", 0.0))  # -0.1 to 0.1
+        contrast = float(settings.get("contrast", 1.0))      # 0.9 to 1.1
+        if abs(brightness) > 0.001 or abs(contrast - 1.0) > 0.001:
+            vf_parts.append(f"eq=brightness={brightness:.3f}:contrast={contrast:.3f}")
+
+        # Slight Rotation (degrees, 0.5 to 1.5)
+        rotation = float(settings.get("rotation", 0))
+        if rotation != 0:
+            rad = rotation * 3.14159265 / 180
+            vf_parts.append(f"rotate={rad:.6f}:fillcolor=black@0:c=black")
+
+        # Gaussian Blur (sigma 0.2 - 1.0)
+        blur = float(settings.get("blur", 0))
+        if blur > 0:
+            blur = max(0.1, min(2.0, blur))
+            vf_parts.append(f"gblur=sigma={blur:.2f}")
+
+        # Speed Change — video part: setpts
+        speed = float(settings.get("speed", 1.0))
+        if abs(speed - 1.0) > 0.001:
+            speed = max(0.9, min(1.15, speed))
+            pts_factor = 1.0 / speed
+            vf_parts.append(f"setpts={pts_factor:.4f}*PTS")
+
+        # Letterbox (add black bars top/bottom — 10% height increase)
+        if settings.get("letterbox"):
+            vf_parts.append("pad=iw:ih*1.1:(ow-iw)/2:(oh-ih)/2:color=black")
+
+        # Color Grade (cinematic LUT via curves — warm lift + cool shadows)
+        if settings.get("color_grade"):
+            vf_parts.append(
+                "curves=r='0/0 0.25/0.22 0.5/0.52 0.75/0.78 1/1':"
+                "g='0/0 0.25/0.23 0.5/0.5 0.75/0.77 1/1':"
+                "b='0/0.04 0.25/0.25 0.5/0.5 0.75/0.76 1/0.97'"
+            )
+
+        # ── Audio Filters ───────────────────────────────────────────────────
+
+        # Pitch Shift (semitones, ±1 to ±5) — change rate then resample to preserve duration
+        pitch_semitones = float(settings.get("pitch_semitones", 0))
+        if pitch_semitones != 0:
+            pitch_semitones = max(-5, min(5, pitch_semitones))
+            factor = 2 ** (pitch_semitones / 12)
+            af_parts.append(f"asetrate=44100*{factor:.6f},aresample=44100,atempo={1.0/factor:.6f}")
+
+        # Speed/Tempo change — audio part (independent of video speed or combined)
+        if abs(speed - 1.0) > 0.001and not settings.get("pitch_semitones"):
+            tempo = max(0.5, min(2.0, speed))
+            af_parts.append(f"atempo={tempo:.4f}")
+
+        # Background Noise Layer (very subtle pink noise at -45dB)
+        if settings.get("bg_noise"):
+            af_parts.append("aevalsrc=random(0)*0.003:s=44100:c=stereo[noise];[0:a][noise]amix=inputs=2:weights=1 0.02:normalize=0")
+
+        # EQ / Low-pass filter (reduce highs above 12kHz)
+        if settings.get("eq_lowpass"):
+            af_parts.append("lowpass=f=12000,highpass=f=60")
+
+        # Volume Normalization (loudnorm)
+        if settings.get("normalize"):
+            af_parts.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+
+        # Stereo to Mono and back (re-expand to stereo)
+        if settings.get("stereo_remix"):
+            af_parts.append("pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1")
+
+        # Subtle Audio Reverb (echo decay)
+        if settings.get("reverb"):
+            af_parts.append("aecho=0.8:0.88:60:0.4")
+
+        vf = ",".join(vf_parts) if vf_parts else None
+        af = ",".join(af_parts) if af_parts else None
+
+        return vf, af
+
+    @staticmethod
+    def apply_copyright_bypass(
+        video_path: str,
+        settings: Dict[str, Any],
+        output_dir: str,
+        start_sec: float = 0.0,
+        end_sec: float = 0.0,
+    ) -> Dict[str, Any]:
+        """
+        Apply copyright bypass transformations to a video (or clip segment).
+        Returns dict with output_path, download_url, success.
+        """
+        if not os.path.exists(video_path):
+            return {"success": False, "error": f"Source video not found: {video_path}"}
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        base_name = os.path.splitext(os.path.basename(video_path))[0]
+        ts = int(time.time())
+        out_name = f"Bypass_{base_name}_{ts}.mp4"
+        out_path = os.path.join(output_dir, out_name)
+
+        vf, af = VideoSyncEngine.build_bypass_filters(settings)
+
+        cmd = ["ffmpeg", "-y"]
+
+        # Time range for per-clip processing
+        if start_sec > 0 or end_sec > 0:
+            cmd += ["-ss", f"{start_sec:.3f}", "-to", f"{end_sec:.3f}"]
+
+        cmd += ["-i", video_path]
+
+        # Handle bg_noise which requires filter_complex
+        if settings.get("bg_noise") and af:
+            # bg_noise uses filter_complex, build differently
+            af_no_noise = ",".join(
+                p for p in af.split(",")
+                if "aevalsrc" not in p and "amix" not in p
+            )
+            noise_filter = (
+                f"aevalsrc=random(0)*0.003:s=44100:c=stereo[noise];"
+                f"[0:a]{af_no_noise}[processed];"
+                f"[processed][noise]amix=inputs=2:weights=1 0.02:normalize=0[aout]"
+                if af_no_noise else
+                "aevalsrc=random(0)*0.003:s=44100:c=stereo[noise];"
+                "[0:a][noise]amix=inputs=2:weights=1 0.02:normalize=0[aout]"
+            )
+            if vf:
+                cmd += ["-filter_complex", noise_filter, "-vf", vf, "-map", "0:v", "-map", "[aout]"]
+            else:
+                cmd += ["-filter_complex", noise_filter, "-map", "0:v", "-map", "[aout]"]
+        else:
+            if vf:
+                cmd += ["-vf", vf]
+            if af:
+                cmd += ["-af", af]
+
+        cmd += [
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20",
+            "-c:a", "aac", "-b:a", "192k",
+            out_path
+        ]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, timeout=120)
+            if result.returncode == 0 and os.path.exists(out_path):
+                return {
+                    "success": True,
+                    "output_path": out_path,
+                    "filename": out_name,
+                    "download_url": f"/api/exports/trimmed/{out_name}",
+                }
+            else:
+                stderr = result.stderr.decode("utf-8", errors="replace")[-500:]
+                return {"success": False, "error": f"FFmpeg error: {stderr}"}
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "Processing timeout"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def get_bypass_preset(profile: str) -> Dict[str, Any]:
+        """Return a preset settings dict for the given profile name."""
+        presets = {
+            "light": {
+                "flip": True,
+                "hue": 10,
+                "pitch_semitones": 2,
+            },
+            "medium": {
+                "zoom": 1.03,
+                "color_grade": True,
+                "pitch_semitones": 3,
+                "speed": 1.02,
+                "normalize": True,
+            },
+            "heavy": {
+                "flip": True,
+                "zoom": 1.05,
+                "rotation": 0.8,
+                "blur": 0.3,
+                "pitch_semitones": 5,
+                "bg_noise": True,
+                "speed": 0.97,
+                "eq_lowpass": True,
+                "stereo_remix": True,
+            },
+            "cinematic": {
+                "color_grade": True,
+                "letterbox": True,
+                "normalize": True,
+                "reverb": True,
+                "hue": 8,
+                "saturation": 1.1,
+                "contrast": 1.05,
+            },
+        }
+        return presets.get(profile.lower(), {})
+
 
 video_engine = VideoSyncEngine()
 

@@ -4,7 +4,7 @@ import {
   Scissors, Upload, Play, Pause, Download, Trash2,
   Plus, Clock, ArrowUp, ArrowDown, Film, CheckCircle2,
   Sparkles, RefreshCw, FileVideo, Layers, Video, Smartphone, Monitor, Square,
-  Zap, Archive, Eye, RotateCcw, X, EyeOff, LayoutGrid, FileText
+  Zap, Archive, Eye, RotateCcw, X, FileText, ShieldAlert, Sliders, ChevronDown, ChevronUp
 } from 'lucide-react';
 
 interface ClipSegment {
@@ -90,6 +90,34 @@ export const VideoTrimmerView: React.FC = () => {
   const [combinedUrl, setCombinedUrl] = useState<string | null>(null);
   const [zipDownloadUrl, setZipDownloadUrl] = useState<string | null>(null);
   const [isZipping, setIsZipping] = useState<boolean>(false);
+
+  // Copyright Bypass State
+  const [showBypassPanel, setShowBypassPanel] = useState<boolean>(false);
+  const [bypassProfile, setBypassProfile] = useState<string>('light');
+  const [bypassApplyMode, setBypassApplyMode] = useState<'entire' | 'clip'>('entire');
+  const [isBypassing, setIsBypassing] = useState<boolean>(false);
+  const [bypassResult, setBypassResult] = useState<{ filename: string; download_url: string } | null>(null);
+  const [bypassAfterUrl, setBypassAfterUrl] = useState<string | null>(null);
+  const bypassVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [bypassSettings, setBypassSettings] = useState<Record<string, boolean | number>>({
+    flip: false,
+    zoom: 0,
+    hue: 0,
+    saturation: 1.0,
+    brightness: 0,
+    contrast: 1.0,
+    rotation: 0,
+    blur: 0,
+    speed: 1.0,
+    letterbox: false,
+    color_grade: false,
+    pitch_semitones: 0,
+    bg_noise: false,
+    eq_lowpass: false,
+    normalize: false,
+    stereo_remix: false,
+    reverb: false,
+  });
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -1099,6 +1127,257 @@ export const VideoTrimmerView: React.FC = () => {
             </div>
           )}
         </div>
+      </div>
+
+      {/* ─── COPYRIGHT BYPASS SECTION ─── */}
+      <div className="card-neo p-5 space-y-5 border-2 border-accent/30 bg-accent/5">
+        <div
+          className="flex items-center justify-between cursor-pointer"
+          onClick={() => setShowBypassPanel(!showBypassPanel)}
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center">
+              <ShieldAlert className="w-4 h-4 text-white" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
+                Copyright Bypass Engine
+                <span className="px-2 py-0.5 text-[10px] font-bold bg-accent text-white rounded-full">18 Transforms</span>
+              </h2>
+              <p className="text-[11px] text-text-muted">Visual + Audio FFmpeg transformations to defeat fingerprinting algorithms</p>
+            </div>
+          </div>
+          <button className="p-1.5 rounded-lg bg-surface border border-border text-text-muted hover:text-accent transition-all">
+            {showBypassPanel ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+        </div>
+
+        {showBypassPanel && (
+          <div className="space-y-5 pt-2">
+            {/* Preset Profile Selector */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-text-primary uppercase tracking-wider flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-accent" /> One-Click Preset Profiles
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { id: 'light', label: '🔵 Light (Subtle)', desc: 'Flip + Hue + Pitch ±2st' },
+                  { id: 'medium', label: '🟡 Medium', desc: 'Zoom + Color grade + Pitch ±3st' },
+                  { id: 'heavy', label: '🔴 Heavy (Max)', desc: 'Flip + Zoom + Blur + Pitch ±5st + Noise' },
+                  { id: 'cinematic', label: '🎨 Cinematic', desc: 'LUT + Letterbox + Reverb' },
+                ].map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => setBypassProfile(p.id)}
+                    className={`p-3 rounded-lg border-2 text-left transition-all space-y-1 ${
+                      bypassProfile === p.id
+                        ? 'border-accent bg-accent/10'
+                        : 'border-border bg-surface hover:border-accent/50'
+                    }`}
+                  >
+                    <div className="text-xs font-bold text-text-primary">{p.label}</div>
+                    <div className="text-[10px] text-text-muted">{p.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Individual Toggles Grid */}
+            <div className="space-y-3">
+              <label className="text-xs font-bold text-text-primary uppercase tracking-wider flex items-center gap-1.5">
+                <Sliders className="w-3.5 h-3.5 text-accent" /> Visual Transformations
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+                {[
+                  { key: 'flip', label: 'Horizontal Flip', type: 'bool' },
+                  { key: 'zoom', label: 'Zoom 1.03x', type: 'num', val: 1.03, off: 0 },
+                  { key: 'hue', label: 'Hue Shift +15°', type: 'num', val: 15, off: 0 },
+                  { key: 'saturation', label: 'Saturation +15%', type: 'num', val: 1.15, off: 1.0 },
+                  { key: 'brightness', label: 'Brightness +5%', type: 'num', val: 0.05, off: 0 },
+                  { key: 'contrast', label: 'Contrast +5%', type: 'num', val: 1.05, off: 1.0 },
+                  { key: 'rotation', label: 'Rotation 0.8°', type: 'num', val: 0.8, off: 0 },
+                  { key: 'blur', label: 'Blur 0.3px', type: 'num', val: 0.3, off: 0 },
+                  { key: 'letterbox', label: 'Letterbox', type: 'bool' },
+                  { key: 'color_grade', label: 'Color Grade (LUT)', type: 'bool' },
+                ].map((item) => {
+                  const isOn = item.type === 'bool'
+                    ? !!bypassSettings[item.key]
+                    : bypassSettings[item.key] !== (item as any).off;
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={() => setBypassSettings((prev) => ({
+                        ...prev,
+                        [item.key]: isOn
+                          ? (item.type === 'bool' ? false : (item as any).off)
+                          : (item.type === 'bool' ? true : (item as any).val),
+                      }))}
+                      className={`p-2.5 rounded-lg border-2 text-xs font-semibold text-left transition-all ${
+                        isOn ? 'border-accent bg-accent/10 text-accent' : 'border-border bg-surface text-text-muted hover:border-accent/40'
+                      }`}
+                    >
+                      <span className="block text-base mb-0.5">{isOn ? '✅' : '⬜'}</span>
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <label className="text-xs font-bold text-text-primary uppercase tracking-wider flex items-center gap-1.5 pt-1">
+                <Zap className="w-3.5 h-3.5 text-accent" /> Audio Transformations
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                {[
+                  { key: 'pitch_semitones', label: 'Pitch Shift +3st', type: 'num', val: 3, off: 0 },
+                  { key: 'speed', label: 'Speed +3%', type: 'num', val: 1.03, off: 1.0 },
+                  { key: 'bg_noise', label: 'BG Noise Layer', type: 'bool' },
+                  { key: 'eq_lowpass', label: 'EQ / Low-pass', type: 'bool' },
+                  { key: 'normalize', label: 'Vol. Normalize', type: 'bool' },
+                  { key: 'stereo_remix', label: 'Stereo Remix', type: 'bool' },
+                  { key: 'reverb', label: 'Subtle Reverb', type: 'bool' },
+                ].map((item) => {
+                  const isOn = item.type === 'bool'
+                    ? !!bypassSettings[item.key]
+                    : bypassSettings[item.key] !== (item as any).off;
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={() => setBypassSettings((prev) => ({
+                        ...prev,
+                        [item.key]: isOn
+                          ? (item.type === 'bool' ? false : (item as any).off)
+                          : (item.type === 'bool' ? true : (item as any).val),
+                      }))}
+                      className={`p-2.5 rounded-lg border-2 text-xs font-semibold text-left transition-all ${
+                        isOn ? 'border-accent bg-accent/10 text-accent' : 'border-border bg-surface text-text-muted hover:border-accent/40'
+                      }`}
+                    >
+                      <span className="block text-base mb-0.5">{isOn ? '✅' : '⬜'}</span>
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Apply Mode + Action Row */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-border">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold text-text-primary">Apply To:</span>
+                <div className="flex items-center gap-1 bg-surface p-1 rounded-lg border border-border text-xs">
+                  <button
+                    onClick={() => setBypassApplyMode('entire')}
+                    className={`px-3 py-1 rounded font-bold transition-all ${
+                      bypassApplyMode === 'entire' ? 'bg-accent text-white' : 'text-text-secondary hover:text-text-primary'
+                    }`}
+                  >
+                    🎬 Entire Video
+                  </button>
+                  <button
+                    onClick={() => setBypassApplyMode('clip')}
+                    className={`px-3 py-1 rounded font-bold transition-all ${
+                      bypassApplyMode === 'clip' ? 'bg-accent text-white' : 'text-text-secondary hover:text-text-primary'
+                    }`}
+                  >
+                    ✂️ Current Clip Range
+                  </button>
+                </div>
+              </div>
+
+              <button
+                onClick={async () => {
+                  setIsBypassing(true);
+                  setBypassResult(null);
+                  setBypassAfterUrl(null);
+                  const payload: Record<string, unknown> = {
+                    video_path: backendVideoPath || videoUrl || 'upload',
+                    profile: bypassProfile,
+                    settings: bypassSettings,
+                    apply_mode: bypassApplyMode,
+                  };
+                  if (bypassApplyMode === 'clip' && segments.length > 0) {
+                    payload.start_sec = segments[0].startSec;
+                    payload.end_sec = segments[0].endSec;
+                  }
+                  try {
+                    const res = await fetch('/api/video/copyright-bypass', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(payload),
+                    });
+                    if (res.ok) {
+                      const data = await res.json();
+                      setBypassResult(data);
+                      setBypassAfterUrl(data.download_url);
+                      showToast(`Bypass complete! Profile: ${data.profile}`, 'success');
+                    } else {
+                      const err = await res.json();
+                      showToast(`Bypass failed: ${err.detail}`, 'error');
+                    }
+                  } catch {
+                    showToast('Backend offline — start the server first', 'error');
+                  } finally {
+                    setIsBypassing(false);
+                  }
+                }}
+                className="px-7 py-3 text-xs font-bold text-white rounded-card bg-accent hover:bg-accent-hover border-2 border-text-primary shadow-neo-md hover:scale-105 active:scale-95 transition-all flex items-center gap-2.5"
+              >
+                {isBypassing ? (
+                  <><RefreshCw className="w-4 h-4 animate-spin" /> Applying Bypass...</>
+                ) : (
+                  <><ShieldAlert className="w-4 h-4" /> Apply Copyright Bypass</>
+                )}
+              </button>
+            </div>
+
+            {/* Before / After Preview */}
+            {bypassAfterUrl && (
+              <div className="space-y-3 pt-2 border-t border-border">
+                <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
+                  <Eye className="w-4 h-4 text-accent" /> Before / After Preview
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* BEFORE */}
+                  <div className="space-y-1.5">
+                    <span className="text-[11px] font-bold text-text-muted uppercase tracking-wider">🎬 Before (Original)</span>
+                    <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-border">
+                      <video
+                        src={videoUrl || ''}
+                        className="w-full h-full object-contain"
+                        controls
+                        muted
+                      />
+                    </div>
+                  </div>
+
+                  {/* AFTER */}
+                  <div className="space-y-1.5">
+                    <span className="text-[11px] font-bold text-accent uppercase tracking-wider">✅ After (Bypassed)</span>
+                    <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-accent/50">
+                      <video
+                        ref={bypassVideoRef}
+                        src={bypassAfterUrl}
+                        className="w-full h-full object-contain"
+                        controls
+                        autoPlay
+                        muted
+                      />
+                    </div>
+                    {bypassResult && (
+                      <a
+                        href={bypassResult.download_url}
+                        download
+                        className="btn-neo-primary w-full py-2 text-xs font-bold flex items-center justify-center gap-2 mt-1"
+                      >
+                        <Download className="w-3.5 h-3.5" /> Download Bypassed Video ({bypassResult.filename})
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1034,4 +1034,82 @@ def serve_trimmed_export(filename: str):
     return FileResponse(path, media_type=media_type, filename=safe_name)
 
 
+# ─── Copyright Bypass Routes ────────────────────────────────────────────────────
 
+@router.get("/video/bypass-preset/{profile}")
+def get_bypass_preset(profile: str):
+    """Return a copyright bypass preset settings dict by profile name."""
+    settings = video_engine.get_bypass_preset(profile)
+    if not settings:
+        raise HTTPException(status_code=404, detail=f"Unknown preset: {profile}. Use: light, medium, heavy, cinematic")
+    return {"profile": profile, "settings": settings}
+
+
+@router.post("/video/copyright-bypass")
+def apply_copyright_bypass_route(payload: Dict[str, Any] = Body(...)):
+    """
+    Apply copyright bypass transformations to a video file.
+    Payload:
+      - video_path: server path or /api/video/serve/... URL
+      - settings: dict of transformation flags/values
+      - profile: optional preset name (light/medium/heavy/cinematic) — overrides settings if provided
+      - apply_mode: 'entire' (default) or 'clip'
+      - start_sec: float (only for clip mode)
+      - end_sec: float (only for clip mode)
+    """
+    video_path = payload.get("video_path", "")
+    settings = payload.get("settings", {})
+    profile = payload.get("profile", "")
+    apply_mode = payload.get("apply_mode", "entire")
+    start_sec = float(payload.get("start_sec", 0.0))
+    end_sec = float(payload.get("end_sec", 0.0))
+
+    # Load preset if provided
+    if profile:
+        preset_settings = video_engine.get_bypass_preset(profile)
+        if preset_settings:
+            settings = {**preset_settings, **settings}  # merge — custom values override preset
+
+    if not settings:
+        raise HTTPException(status_code=400, detail="No settings or preset provided")
+
+    # Resolve video_path
+    if video_path.startswith("/api/video/serve/") or video_path.startswith("/api/audio/"):
+        filename = video_path.split("/")[-1]
+        video_path = os.path.join(TEMP_DIR, filename)
+
+    if not os.path.exists(video_path):
+        # Try most recent upload
+        recent = [
+            os.path.join(TEMP_DIR, f) for f in os.listdir(TEMP_DIR)
+            if f.startswith("upload_video_") or f.startswith("upload_")
+        ]
+        if recent:
+            recent.sort(key=os.path.getmtime, reverse=True)
+            video_path = recent[0]
+
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Source video file not found. Please upload a video first.")
+
+    clip_start = start_sec if apply_mode == "clip" else 0.0
+    clip_end = end_sec if apply_mode == "clip" else 0.0
+
+    result = video_engine.apply_copyright_bypass(
+        video_path=video_path,
+        settings=settings,
+        output_dir=TRIMMED_DIR,
+        start_sec=clip_start,
+        end_sec=clip_end,
+    )
+
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Bypass processing failed"))
+
+    return {
+        "success": True,
+        "profile": profile or "custom",
+        "apply_mode": apply_mode,
+        "filename": result["filename"],
+        "download_url": result["download_url"],
+        "output_path": result["output_path"],
+    }
