@@ -613,6 +613,22 @@ class VideoSyncEngine:
 
         vf, af = VideoSyncEngine.build_bypass_filters(settings)
 
+        # Check if video has audio stream
+        has_audio = False
+        try:
+            probe = subprocess.run([
+                "ffprobe", "-v", "error",
+                "-select_streams", "a",
+                "-show_entries", "stream=codec_type",
+                "-of", "csv=p=0", video_path
+            ], capture_output=True, text=True, timeout=10)
+            has_audio = "audio" in probe.stdout.strip()
+        except Exception:
+            has_audio = False
+
+        if not has_audio:
+            af = None
+
         cmd = ["ffmpeg", "-y"]
 
         # Time range for per-clip processing
@@ -622,12 +638,11 @@ class VideoSyncEngine:
         cmd += ["-i", video_path]
 
         # Handle bg_noise which requires filter_complex
-        if settings.get("bg_noise") and af:
-            # bg_noise uses filter_complex, build differently
+        if settings.get("bg_noise") and has_audio:
             af_no_noise = ",".join(
-                p for p in af.split(",")
+                p for p in (af or "").split(",")
                 if "aevalsrc" not in p and "amix" not in p
-            )
+            ) if af else ""
             noise_filter = (
                 f"aevalsrc=random(0)*0.003:s=44100:c=stereo[noise];"
                 f"[0:a]{af_no_noise}[processed];"
@@ -637,20 +652,23 @@ class VideoSyncEngine:
                 "[0:a][noise]amix=inputs=2:weights=1 0.02:normalize=0[aout]"
             )
             if vf:
-                cmd += ["-filter_complex", noise_filter, "-vf", vf, "-map", "0:v", "-map", "[aout]"]
+                cmd += ["-filter_complex", noise_filter, "-vf", vf, "-map", "0:v:0", "-map", "[aout]"]
             else:
-                cmd += ["-filter_complex", noise_filter, "-map", "0:v", "-map", "[aout]"]
+                cmd += ["-filter_complex", noise_filter, "-map", "0:v:0", "-map", "[aout]"]
         else:
             if vf:
                 cmd += ["-vf", vf]
-            if af:
+            if af and has_audio:
                 cmd += ["-af", af]
 
-        cmd += [
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20",
-            "-c:a", "aac", "-b:a", "192k",
-            out_path
-        ]
+        cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "20"]
+
+        if has_audio:
+            cmd += ["-c:a", "aac", "-b:a", "192k"]
+        else:
+            cmd += ["-an"]
+
+        cmd.append(out_path)
 
         try:
             result = subprocess.run(cmd, capture_output=True, timeout=120)
