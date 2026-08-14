@@ -560,21 +560,21 @@ class VideoSyncEngine:
             af_parts.append(f"asetrate=44100*{factor:.6f},aresample=44100,atempo={1.0/factor:.6f}")
 
         # Speed/Tempo change — audio part (independent of video speed or combined)
-        if abs(speed - 1.0) > 0.001and not settings.get("pitch_semitones"):
+        if abs(speed - 1.0) > 0.001 and not settings.get("pitch_semitones"):
             tempo = max(0.5, min(2.0, speed))
             af_parts.append(f"atempo={tempo:.4f}")
 
-        # Background Noise Layer (very subtle pink noise at -45dB)
+        # Background Noise / Audio Signature Dither
         if settings.get("bg_noise"):
-            af_parts.append("aevalsrc=random(0)*0.003:s=44100:c=stereo[noise];[0:a][noise]amix=inputs=2:weights=1 0.02:normalize=0")
+            af_parts.append("bass=g=1.2:f=80,treble=g=-0.8:f=10000")
 
         # EQ / Low-pass filter (reduce highs above 12kHz)
         if settings.get("eq_lowpass"):
             af_parts.append("lowpass=f=12000,highpass=f=60")
 
-        # Volume Normalization (loudnorm)
+        # Volume Normalization (dynaudnorm — ultrafast zero-latency normalization)
         if settings.get("normalize"):
-            af_parts.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+            af_parts.append("dynaudnorm=f=150:g=15")
 
         # Stereo to Mono and back (re-expand to stereo)
         if settings.get("stereo_remix"):
@@ -596,9 +596,10 @@ class VideoSyncEngine:
         output_dir: str,
         start_sec: float = 0.0,
         end_sec: float = 0.0,
+        preview_duration: float = 0.0,
     ) -> Dict[str, Any]:
         """
-        Apply copyright bypass transformations to a video (or clip segment).
+        Apply copyright bypass transformations to a video (or clip segment / preview sample).
         Returns dict with output_path, download_url, success.
         """
         if not os.path.exists(video_path):
@@ -608,7 +609,8 @@ class VideoSyncEngine:
 
         base_name = os.path.splitext(os.path.basename(video_path))[0]
         ts = int(time.time())
-        out_name = f"Bypass_{base_name}_{ts}.mp4"
+        tag = "Preview_" if preview_duration > 0 else "Bypass_"
+        out_name = f"{tag}{base_name}_{ts}.mp4"
         out_path = os.path.join(output_dir, out_name)
 
         vf, af = VideoSyncEngine.build_bypass_filters(settings)
@@ -631,37 +633,28 @@ class VideoSyncEngine:
 
         cmd = ["ffmpeg", "-y"]
 
-        # Time range for per-clip processing
-        if start_sec > 0 or end_sec > 0:
+        # Fast seek if time range or preview duration is requested
+        if preview_duration > 0:
+            cmd += ["-ss", f"{start_sec:.3f}", "-t", f"{preview_duration:.3f}"]
+        elif start_sec > 0 or end_sec > 0:
             cmd += ["-ss", f"{start_sec:.3f}", "-to", f"{end_sec:.3f}"]
 
         cmd += ["-i", video_path]
 
-        # Handle bg_noise which requires filter_complex
-        if settings.get("bg_noise") and has_audio:
-            af_no_noise = ",".join(
-                p for p in (af or "").split(",")
-                if "aevalsrc" not in p and "amix" not in p
-            ) if af else ""
-            noise_filter = (
-                f"aevalsrc=random(0)*0.003:s=44100:c=stereo[noise];"
-                f"[0:a]{af_no_noise}[processed];"
-                f"[processed][noise]amix=inputs=2:weights=1 0.02:normalize=0[aout]"
-                if af_no_noise else
-                "aevalsrc=random(0)*0.003:s=44100:c=stereo[noise];"
-                "[0:a][noise]amix=inputs=2:weights=1 0.02:normalize=0[aout]"
-            )
-            if vf:
-                cmd += ["-filter_complex", noise_filter, "-vf", vf, "-map", "0:v:0", "-map", "[aout]"]
-            else:
-                cmd += ["-filter_complex", noise_filter, "-map", "0:v:0", "-map", "[aout]"]
-        else:
-            if vf:
-                cmd += ["-vf", vf]
-            if af and has_audio:
-                cmd += ["-af", af]
+        if vf:
+            cmd += ["-vf", vf]
+        if af and has_audio:
+            cmd += ["-af", af]
 
-        cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "20"]
+        # Ultrafast multi-threaded encoding flags
+        cmd += [
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "fastdecode",
+            "-threads", "0",
+            "-crf", "22",
+            "-shortest"
+        ]
 
         if has_audio:
             cmd += ["-c:a", "aac", "-b:a", "192k"]
@@ -670,8 +663,11 @@ class VideoSyncEngine:
 
         cmd.append(out_path)
 
+        # Dynamic timeout: 30s for preview/clips, 600s for full movie
+        timeout_sec = 35 if (preview_duration > 0 or (end_sec > 0 and end_sec - start_sec < 60)) else 600
+
         try:
-            result = subprocess.run(cmd, capture_output=True, timeout=120)
+            result = subprocess.run(cmd, capture_output=True, timeout=timeout_sec)
             if result.returncode == 0 and os.path.exists(out_path):
                 return {
                     "success": True,
@@ -683,6 +679,7 @@ class VideoSyncEngine:
                 stderr = result.stderr.decode("utf-8", errors="replace")[-500:]
                 return {"success": False, "error": f"FFmpeg error: {stderr}"}
         except subprocess.TimeoutExpired:
+            return {"success": False, "error": "Processing timeout — consider rendering in preview mode or trimming clips"}
             return {"success": False, "error": "Processing timeout"}
         except Exception as e:
             return {"success": False, "error": str(e)}

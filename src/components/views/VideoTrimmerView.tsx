@@ -1397,53 +1397,100 @@ export const VideoTrimmerView: React.FC = () => {
                 </span>
               </div>
 
-              <button
-                onClick={async () => {
-                  setIsBypassing(true);
-                  setBypassResult(null);
-                  setBypassAfterUrl(null);
-                  const payload: Record<string, unknown> = {
-                    video_path: backendVideoPath || videoUrl || 'upload',
-                    profile: bypassProfile,
-                    settings: bypassSettings,
-                    apply_mode: 'entire',
-                  };
-                  try {
-                    let res = await fetch('/api/video/copyright-bypass', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(payload),
-                    });
-                    if (!res.ok && res.status === 404) {
-                      res = await fetch('/api/copyright-bypass', {
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={async () => {
+                    setIsBypassing(true);
+                    setBypassResult(null);
+                    setBypassAfterUrl(null);
+                    const payload: Record<string, unknown> = {
+                      video_path: backendVideoPath || videoUrl || 'upload',
+                      profile: bypassProfile,
+                      settings: bypassSettings,
+                      is_preview: true,
+                      preview_duration: 15.0,
+                    };
+                    try {
+                      let res = await fetch('/api/video/copyright-bypass', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload),
                       });
+                      if (!res.ok && res.status === 404) {
+                        res = await fetch('/api/copyright-bypass', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(payload),
+                        });
+                      }
+                      if (res.ok) {
+                        const data = await res.json();
+                        setBypassResult(data);
+                        setBypassAfterUrl(data.download_url);
+                        showToast(`Instant 15s preview ready! (Profile: ${data.profile})`, 'success');
+                      } else {
+                        const err = await res.json();
+                        showToast(`Bypass failed: ${err.detail || 'Error processing'}`, 'error');
+                      }
+                    } catch {
+                      showToast('Backend offline — start the server first', 'error');
+                    } finally {
+                      setIsBypassing(false);
                     }
-                    if (res.ok) {
-                      const data = await res.json();
-                      setBypassResult(data);
-                      setBypassAfterUrl(data.download_url);
-                      showToast(`Bypass complete! Profile: ${data.profile}`, 'success');
-                    } else {
-                      const err = await res.json();
-                      showToast(`Bypass failed: ${err.detail || 'Error processing'}`, 'error');
+                  }}
+                  className="px-5 py-2.5 text-xs font-bold text-white rounded-card bg-accent hover:bg-accent-hover border-2 border-text-primary shadow-neo-md hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
+                >
+                  {isBypassing ? (
+                    <><RefreshCw className="w-4 h-4 animate-spin" /> Rendering Preview (15s)...</>
+                  ) : (
+                    <><Zap className="w-4 h-4" /> ⚡ Instant Render (15s Sample)</>
+                  )}
+                </button>
+
+                <button
+                  onClick={async () => {
+                    setIsBypassing(true);
+                    setBypassResult(null);
+                    setBypassAfterUrl(null);
+                    const payload: Record<string, unknown> = {
+                      video_path: backendVideoPath || videoUrl || 'upload',
+                      profile: bypassProfile,
+                      settings: bypassSettings,
+                      is_preview: false,
+                    };
+                    try {
+                      let res = await fetch('/api/video/copyright-bypass', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                      });
+                      if (!res.ok && res.status === 404) {
+                        res = await fetch('/api/copyright-bypass', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(payload),
+                        });
+                      }
+                      if (res.ok) {
+                        const data = await res.json();
+                        setBypassResult(data);
+                        setBypassAfterUrl(data.download_url);
+                        showToast(`Full bypass complete! Profile: ${data.profile}`, 'success');
+                      } else {
+                        const err = await res.json();
+                        showToast(`Bypass failed: ${err.detail || 'Error processing'}`, 'error');
+                      }
+                    } catch {
+                      showToast('Backend offline — start the server first', 'error');
+                    } finally {
+                      setIsBypassing(false);
                     }
-                  } catch {
-                    showToast('Backend offline — start the server first', 'error');
-                  } finally {
-                    setIsBypassing(false);
-                  }
-                }}
-                className="px-7 py-3 text-xs font-bold text-white rounded-card bg-accent hover:bg-accent-hover border-2 border-text-primary shadow-neo-md hover:scale-105 active:scale-95 transition-all flex items-center gap-2.5"
-              >
-                {isBypassing ? (
-                  <><RefreshCw className="w-4 h-4 animate-spin" /> Rendering Bypass Video...</>
-                ) : (
-                  <><ShieldAlert className="w-4 h-4" /> Apply & Render Copyright Bypass</>
-                )}
-              </button>
+                  }}
+                  className="px-4 py-2.5 text-xs font-bold text-text-primary rounded-card bg-surface hover:bg-surface-hover border-2 border-border shadow-neo-sm hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
+                >
+                  <Film className="w-3.5 h-3.5" /> Full Video
+                </button>
+              </div>
             </div>
 
             {/* ─── ALWAYS-VISIBLE BEFORE & AFTER COMPARISON PREVIEW ─── */}

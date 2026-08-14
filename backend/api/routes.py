@@ -1064,6 +1064,9 @@ def apply_copyright_bypass_route(payload: Dict[str, Any] = Body(...)):
     apply_mode = payload.get("apply_mode", "entire")
     start_sec = float(payload.get("start_sec", 0.0))
     end_sec = float(payload.get("end_sec", 0.0))
+    preview_duration = float(payload.get("preview_duration", 0.0))
+    if payload.get("is_preview", False) and preview_duration <= 0:
+        preview_duration = 15.0
 
     # Load preset if provided
     if profile:
@@ -1101,6 +1104,7 @@ def apply_copyright_bypass_route(payload: Dict[str, Any] = Body(...)):
         output_dir=TRIMMED_DIR,
         start_sec=clip_start,
         end_sec=clip_end,
+        preview_duration=preview_duration,
     )
 
     if not result.get("success"):
