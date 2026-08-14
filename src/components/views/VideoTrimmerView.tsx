@@ -102,6 +102,27 @@ export const VideoTrimmerView: React.FC = () => {
     localStorage.setItem('provoice_trimmer_results', JSON.stringify(trimmedResults));
   }, [trimmedResults]);
 
+  // Spacebar = toggle play/pause (only when video is loaded, skip if user is typing in input/textarea)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (!videoRef.current) return;
+        if (videoRef.current.paused) {
+          videoRef.current.play();
+          setIsPlaying(true);
+        } else {
+          videoRef.current.pause();
+          setIsPlaying(false);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   // Helper: Format seconds to HH:MM:SS.ms
   const formatTimecode = (sec: number): string => {
     if (isNaN(sec) || sec < 0) return '00:00:00.000';
