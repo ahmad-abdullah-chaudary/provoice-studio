@@ -1,6 +1,6 @@
 import React from 'react';
 import { useStudioStore } from '@/store/useStudioStore';
-import { Wand2, Save, Mic, Loader2, Sliders, PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { Save, Mic, Sliders } from 'lucide-react';
 
 export const TopNav: React.FC = () => {
   const {
@@ -9,8 +9,6 @@ export const TopNav: React.FC = () => {
     selectedVoiceId,
     setSelectedVoiceId,
     voices,
-    startGeneration,
-    generationJob,
     setActiveTab,
     inspectorCollapsed,
     toggleInspector,
@@ -55,25 +53,6 @@ export const TopNav: React.FC = () => {
             Browse
           </button>
         </div>
-
-        {/* Primary Action Button: Soft Neobrutalism Generate Button */}
-        <button
-          onClick={() => startGeneration(currentProject.script)}
-          disabled={generationJob.status === 'processing' || !currentProject.script.trim()}
-          className="btn-neo px-4 md:px-5 py-2 md:py-2.5 text-xs md:text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {generationJob.status === 'processing' ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin text-white" />
-              <span className="hidden sm:inline">Rendering…</span>
-            </>
-          ) : (
-            <>
-              <Wand2 className="w-4 h-4 text-white stroke-[2.5]" />
-              <span>Generate</span>
-            </>
-          )}
-        </button>
 
         {/* Toggle Audio Inspector */}
         <button

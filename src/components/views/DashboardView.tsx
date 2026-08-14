@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useStudioStore } from '@/store/useStudioStore';
-import { Wand2, Mic, Clock, Cpu, FileText, ArrowRight, Play, Sparkles, Layers, Plus, FolderOpen, Loader2 } from 'lucide-react';
+import { Wand2, Mic, Clock, Cpu, FileText, ArrowRight, Play, Sparkles, Layers, Plus, FolderOpen, Loader2, Trash2, CheckCircle2 } from 'lucide-react';
 
 export const DashboardView: React.FC = () => {
   const {
     voices, selectedVoiceId, setSelectedVoiceId, setActiveTab,
     startGeneration, generationJob, systemStats, historyList,
-    projectList, fetchProjects, openProject, createNewProject, saveCurrentProject, currentProject,
+    projectList, fetchProjects, openProject, createNewProject, saveCurrentProject, currentProject, deleteProject,
   } = useStudioStore();
 
   const [quickText, setQuickText] = useState(
@@ -174,40 +174,100 @@ export const DashboardView: React.FC = () => {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <FolderOpen className="w-5 h-5 text-accent" />
-            <h2 className="font-bold text-base text-text-primary">Projects</h2>
-            <span className="text-xs font-bold text-text-muted bg-bg-secondary px-2 py-0.5 rounded-badge border border-border">{projectList.length}</span>
+            <h2 className="font-bold text-base text-text-primary">Saved Projects</h2>
+            <span className="text-xs font-bold text-accent bg-accent/10 px-2.5 py-0.5 rounded-full border border-accent/20">
+              {projectList.length}
+            </span>
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={saveCurrentProject}
-              className="btn-neo-secondary px-4 py-2 text-xs flex items-center gap-2">
-              Save Current
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => saveCurrentProject()}
+              className="btn-neo-secondary px-4 py-2 text-xs flex items-center gap-2"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 text-success" /> Save Current Project
             </button>
-            <button onClick={createNewProject}
-              className="btn-neo px-4 py-2 text-xs flex items-center gap-2">
+            <button
+              onClick={() => createNewProject()}
+              className="btn-neo px-4 py-2 text-xs flex items-center gap-2"
+            >
               <Plus className="w-4 h-4 text-white" /> New Project
             </button>
           </div>
         </div>
 
         {projectList.length === 0 ? (
-          <div className="p-10 bg-surface border border-dashed border-border rounded-card text-center">
-            <FolderOpen className="w-8 h-8 text-border mx-auto mb-3" />
-            <p className="text-sm text-text-muted">No projects yet. Save your current work or create a new project.</p>
+          <div className="p-10 bg-surface border-2 border-dashed border-border rounded-2xl text-center space-y-3">
+            <FolderOpen className="w-10 h-10 text-text-muted mx-auto opacity-50" />
+            <p className="text-sm font-semibold text-text-primary">No saved projects yet</p>
+            <p className="text-xs text-text-muted max-w-sm mx-auto">
+              Create a new project or save your current narration session to access it anytime here.
+            </p>
+            <button
+              onClick={() => createNewProject()}
+              className="btn-neo px-5 py-2.5 text-xs font-bold inline-flex items-center gap-2 mt-2"
+            >
+              <Plus className="w-4 h-4 text-white" /> Create First Project
+            </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {projectList.map(p => (
-              <button key={p.id} onClick={() => openProject(p)}
-                className={`text-left p-5 bg-surface rounded-card border-2 transition-all hover:shadow-neo-sm ${
-                  p.id === currentProject.id ? 'border-accent shadow-neo-sm' : 'border-border hover:border-text-primary'
-                }`}>
-                <div className="font-bold text-text-primary mb-1 truncate">{p.title}</div>
-                <div className="text-xs text-text-muted mb-2">{p.voice} · {(p.segments || []).length} segment(s)</div>
-                <div className="text-[11px] text-text-muted">
-                  {new Date(p.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+            {projectList.map((p) => {
+              const isActive = p.id === currentProject.id;
+              const dateStr = p.updated_at
+                ? new Date(p.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                : 'Recently';
+              return (
+                <div
+                  key={p.id}
+                  onClick={() => openProject(p)}
+                  className={`p-5 bg-surface rounded-2xl border-2 transition-all cursor-pointer hover:shadow-neo-sm space-y-3 ${
+                    isActive ? 'border-accent shadow-neo-sm bg-accent/5' : 'border-border hover:border-text-primary'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-bold text-sm text-text-primary truncate flex items-center gap-2">
+                        {p.title || 'Untitled Project'}
+                        {isActive && (
+                          <span className="px-2 py-0.5 text-[9px] font-bold bg-accent text-white rounded-full shrink-0">
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-text-muted mt-0.5">
+                        Voice: <span className="font-semibold text-text-secondary font-mono">{p.voice || 'af_bella'}</span> • {(p.segments || []).length} segment(s)
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm(`Delete project "${p.title}"?`)) {
+                          deleteProject(p.id);
+                        }
+                      }}
+                      className="p-1.5 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-all shrink-0"
+                      title="Delete Project"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {p.script && (
+                    <p className="text-xs text-text-secondary line-clamp-2 italic bg-bg-secondary p-2.5 rounded-lg border border-border/60">
+                      "{p.script}"
+                    </p>
+                  )}
+
+                  <div className="flex items-center justify-between pt-1 border-t border-border/80 text-[11px] text-text-muted">
+                    <span>Last modified: {dateStr}</span>
+                    <span className="font-bold text-accent hover:underline flex items-center gap-1">
+                      Open <ArrowRight className="w-3 h-3" />
+                    </span>
+                  </div>
                 </div>
-              </button>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

@@ -168,10 +168,11 @@ interface StudioState {
   currentProject: Project;
   projectList: Project[];
   updateProjectTitle: (t: string) => void;
-  saveCurrentProject: () => Promise<void>;
+  saveCurrentProject: (silent?: boolean) => Promise<void>;
   fetchProjects: () => Promise<void>;
   openProject: (p: Project) => void;
   createNewProject: () => void;
+  deleteProject: (id: string) => Promise<void>;
 
   // Audio Player
   currentAudioUrl: string | null; currentAudioMeta: HistoryItem | null;
@@ -437,26 +438,64 @@ export const useStudioStore = create<StudioState>()(
     sendDesktopNotification('ProVoice Studio', `All ${segments.length} segments rendered!`);
   },
 
-  // Project
-  currentProject: {
-    id: `proj_${Date.now()}`, title: 'Untitled Project',
-    script: '', voice: 'af_bella', segments: [initialSegment],
-    settings: {}, updated_at: Date.now(),
+  // Project State & Management
+  currentProject: (() => {
+    try {
+      const saved = localStorage.getItem('provoice_current_project');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      id: `proj_${Date.now()}`,
+      title: 'Untitled Project',
+      script: '',
+      voice: 'af_bella',
+      segments: [initialSegment],
+      settings: {},
+      updated_at: Date.now(),
+    };
+  })(),
+
+  projectList: (() => {
+    try {
+      const saved = localStorage.getItem('provoice_project_list');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  })(),
+
+  updateProjectTitle: (title) => {
+    set((s) => {
+      const updated = { ...s.currentProject, title, updated_at: Date.now() };
+      try { localStorage.setItem('provoice_current_project', JSON.stringify(updated)); } catch {}
+      return { currentProject: updated };
+    });
+    // Auto save
+    get().saveCurrentProject(true);
   },
-  projectList: [],
 
-  updateProjectTitle: (title) =>
-    set((s) => ({ currentProject: { ...s.currentProject, title, updated_at: Date.now() } })),
-
-  saveCurrentProject: async () => {
-    const { currentProject, segments, selectedVoiceId, voiceParams, dspSettings } = get();
-    const project = {
+  saveCurrentProject: async (silent = false) => {
+    const { currentProject, segments, selectedVoiceId, voiceParams, dspSettings, projectList } = get();
+    const script = segments.map((s) => s.script || '').join('\n\n');
+    const project: Project = {
       ...currentProject,
+      script,
       voice: selectedVoiceId,
       segments,
       settings: { voiceParams, dspSettings },
       updated_at: Date.now(),
     };
+
+    // Immediate local persistence
+    try {
+      localStorage.setItem('provoice_current_project', JSON.stringify(project));
+      const updatedList = [
+        project,
+        ...projectList.filter((p) => p.id !== project.id),
+      ];
+      localStorage.setItem('provoice_project_list', JSON.stringify(updatedList));
+      set({ currentProject: project, projectList: updatedList });
+    } catch {}
+
     try {
       const res = await fetch('/api/projects', {
         method: 'POST',
@@ -465,41 +504,104 @@ export const useStudioStore = create<StudioState>()(
       });
       if (res.ok) {
         const data = await res.json();
-        set({ currentProject: data.project });
-        get().showToast('Project saved', 'success');
-        get().fetchProjects();
+        const savedProj = data.project || project;
+        set((s) => ({
+          currentProject: savedProj,
+          projectList: [
+            savedProj,
+            ...s.projectList.filter((p) => p.id !== savedProj.id),
+          ],
+        }));
+        if (!silent) get().showToast('Project saved successfully', 'success');
       }
-    } catch { get().showToast('Failed to save project', 'error'); }
+    } catch {
+      if (!silent) get().showToast('Project saved locally', 'info');
+    }
   },
 
   fetchProjects: async () => {
     try {
       const res = await apiFetch('/api/projects');
-      if (res.ok) { const d = await res.json(); set({ projectList: d.projects || [] }); }
-    } catch {}
+      if (res.ok) {
+        const d = await res.json();
+        if (d.projects && Array.isArray(d.projects)) {
+          set({ projectList: d.projects });
+          try { localStorage.setItem('provoice_project_list', JSON.stringify(d.projects)); } catch {}
+        }
+      }
+    } catch {
+      // Fallback to local storage
+      try {
+        const local = localStorage.getItem('provoice_project_list');
+        if (local) set({ projectList: JSON.parse(local) });
+      } catch {}
+    }
   },
 
   openProject: (p: Project) => {
     const segments = p.segments?.length ? p.segments : [DEFAULT_SEGMENT()];
     set({
-      currentProject: p, segments,
+      currentProject: p,
+      segments,
       activeSegmentId: segments[0].id,
       selectedVoiceId: p.voice || 'af_bella',
       voiceParams: p.settings?.voiceParams || { speed: 1.0, sentenceGapMs: 200, paragraphGapMs: 400 },
       dspSettings: { ...DEFAULT_DSP, ...(p.settings?.dspSettings || {}) },
       activeTab: 'editor',
     });
+    try { localStorage.setItem('provoice_current_project', JSON.stringify(p)); } catch {}
   },
 
   createNewProject: () => {
     const currentVoice = get().selectedVoiceId || 'af_bella';
     const seg = DEFAULT_SEGMENT();
     seg.voice = currentVoice;
+    const now = Date.now();
     const project: Project = {
-      id: `proj_${Date.now()}`, title: 'Untitled Project', script: '',
-      voice: currentVoice, segments: [seg], settings: {}, updated_at: Date.now(),
+      id: `proj_${now}`,
+      title: `Project ${new Date(now).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+      script: '',
+      voice: currentVoice,
+      segments: [seg],
+      settings: {},
+      updated_at: now,
     };
-    set({ currentProject: project, segments: [seg], activeSegmentId: seg.id, activeTab: 'editor' });
+
+    set((s) => ({
+      currentProject: project,
+      segments: [seg],
+      activeSegmentId: seg.id,
+      projectList: [project, ...s.projectList.filter((p) => p.id !== project.id)],
+      activeTab: 'editor',
+    }));
+
+    try {
+      localStorage.setItem('provoice_current_project', JSON.stringify(project));
+      localStorage.setItem('provoice_project_list', JSON.stringify([project, ...get().projectList]));
+    } catch {}
+
+    // Persist to backend
+    fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(project),
+    }).catch(() => {});
+
+    get().showToast(`Created new project: "${project.title}"`, 'success');
+  },
+
+  deleteProject: async (projectId: string) => {
+    try {
+      await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
+    } catch {}
+
+    set((s) => {
+      const updatedList = s.projectList.filter((p) => p.id !== projectId);
+      try { localStorage.setItem('provoice_project_list', JSON.stringify(updatedList)); } catch {}
+      return { projectList: updatedList };
+    });
+
+    get().showToast('Project deleted', 'info');
   },
 
   // Audio Player
