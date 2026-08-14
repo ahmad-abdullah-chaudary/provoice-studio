@@ -59,7 +59,7 @@ export const VideoTrimmerView: React.FC = () => {
 
   // Preview Frame & Export Quality State
   const [previewFrame, setPreviewFrame] = useState<PreviewFrameMode>('mobile');
-  const [exportQuality, setExportQuality] = useState<ExportQualityMode>('2k');
+  const [exportQuality, setExportQuality] = useState<ExportQualityMode>('original');
   const [aspectFit, setAspectFit] = useState<AspectFitMode>('mobile_9_16');
   const [showHowItWorks, setShowHowItWorks] = useState<boolean>(true);
 

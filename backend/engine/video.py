@@ -289,8 +289,8 @@ class VideoSyncEngine:
 
             success = False
 
-            # If original stream copy is requested and no filter needed
-            if export_quality == "original" and not vf_filter:
+            # ALWAYS try fast stream copy first for 0-second instant trimming (unless custom scaling filter is requested)
+            if not vf_filter or export_quality == "original":
                 cmd_copy = [
                     "ffmpeg", "-y",
                     "-ss", f"{start_sec:.3f}",
@@ -301,13 +301,13 @@ class VideoSyncEngine:
                     clip_path
                 ]
                 try:
-                    res = subprocess.run(cmd_copy, capture_output=True, timeout=60)
+                    res = subprocess.run(cmd_copy, capture_output=True, timeout=15)
                     if res.returncode == 0 and os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
                         success = True
                 except Exception:
                     pass
 
-            # High Quality 2K/4K/1080p re-encode
+            # Fast Ultrafast Re-encode fallback
             if not success:
                 cmd_encode = [
                     "ffmpeg", "-y",
@@ -319,12 +319,12 @@ class VideoSyncEngine:
                     cmd_encode += ["-vf", vf_filter]
 
                 cmd_encode += [
-                    "-c:v", "libx264", "-preset", "medium", "-b:v", video_bitrate,
-                    "-c:a", "aac", "-b:a", "320k",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+                    "-c:a", "aac", "-b:a", "192k",
                     clip_path
                 ]
                 try:
-                    res = subprocess.run(cmd_encode, capture_output=True, timeout=300)
+                    res = subprocess.run(cmd_encode, capture_output=True, timeout=30)
                     if res.returncode == 0 and os.path.exists(clip_path):
                         success = True
                 except Exception as e:
