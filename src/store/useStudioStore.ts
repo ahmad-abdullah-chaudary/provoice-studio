@@ -178,7 +178,7 @@ interface StudioState {
   currentAudioUrl: string | null; currentAudioMeta: HistoryItem | null;
   isPlaying: boolean;
   setIsPlaying: (b: boolean) => void;
-  setCurrentAudio: (url: string | null, meta?: HistoryItem | null) => void;
+  setCurrentAudio: (url: string | null, meta?: HistoryItem | null, autoPlay?: boolean) => void;
 
   // System Stats
   systemStats: any; fetchSystemStats: () => Promise<void>;
@@ -250,6 +250,7 @@ interface StudioState {
   sidebarCollapsed: boolean; toggleSidebar: () => void;
   inspectorCollapsed: boolean; toggleInspector: () => void;
   showExportModal: boolean; setShowExportModal: (b: boolean) => void;
+  exportBatchMode: boolean; setExportBatchMode: (b: boolean) => void;
   showTemplatesModal: boolean; setShowTemplatesModal: (b: boolean) => void;
   toast: { message: string; type: 'success' | 'error' | 'info' } | null;
   showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
@@ -308,8 +309,49 @@ export const useStudioStore = create<StudioState>()(
   fetchVoices: async () => {
     try {
       const res = await apiFetch('/api/voices');
-      if (res.ok) { const d = await res.json(); set({ voices: d.voices, backendStatus: 'online' }); }
-    } catch { set({ backendStatus: 'offline' }); }
+      if (res.ok) {
+        const d = await res.json();
+        const availableVoices: Voice[] = d.voices || [];
+        const availableIds = new Set(availableVoices.map((v) => v.id));
+        const { selectedVoiceId, segments } = get();
+
+        // Migrate selectedVoiceId if it refers to a removed/legacy voice
+        let newSelectedVoiceId = selectedVoiceId;
+        if (!availableIds.has(selectedVoiceId)) {
+          if (selectedVoiceId.includes('omega') || selectedVoiceId.includes('madhur') || selectedVoiceId.includes('male') || selectedVoiceId.includes('rohan') || selectedVoiceId.includes('pratham')) {
+            newSelectedVoiceId = 'hm_omega';
+          } else if (selectedVoiceId.includes('hi') || selectedVoiceId.includes('swara') || selectedVoiceId.includes('priyamvada')) {
+            newSelectedVoiceId = 'hf_alpha';
+          } else {
+            newSelectedVoiceId = 'af_bella';
+          }
+        }
+
+        // Migrate any segments containing removed/legacy voices
+        const cleanedSegments = (segments || []).map((s) => {
+          if (s.voice && !availableIds.has(s.voice)) {
+            const v = s.voice;
+            const migratedVoice =
+              v.includes('omega') || v.includes('madhur') || v.includes('male') || v.includes('rohan') || v.includes('pratham')
+                ? 'hm_omega'
+                : v.includes('hi') || v.includes('swara') || v.includes('priyamvada')
+                  ? 'hf_alpha'
+                  : 'af_bella';
+            return { ...s, voice: migratedVoice };
+          }
+          return s;
+        });
+
+        set({
+          voices: availableVoices,
+          backendStatus: 'online',
+          selectedVoiceId: newSelectedVoiceId,
+          segments: cleanedSegments,
+        });
+      }
+    } catch {
+      set({ backendStatus: 'offline' });
+    }
   },
 
   // Voice Params
@@ -386,7 +428,7 @@ export const useStudioStore = create<StudioState>()(
         if (job.status === 'complete') {
           clearInterval(interval);
           const meta = { id: jobId, timestamp: Date.now() / 1000, text: '', voice: '', duration: job.duration, render_time: job.render_time, file_size: job.file_size, sample_rate: job.sample_rate, audio_url: job.audio_url };
-          set({ currentAudioUrl: job.audio_url, currentAudioMeta: meta, isPlaying: true });
+          set({ currentAudioUrl: job.audio_url, currentAudioMeta: meta, isPlaying: false });
           if (segmentId) {
             get().updateSegment(segmentId, { status: 'done', audioUrl: job.audio_url, duration: job.duration });
           }
@@ -607,7 +649,7 @@ export const useStudioStore = create<StudioState>()(
   // Audio Player
   currentAudioUrl: null, currentAudioMeta: null, isPlaying: false,
   setIsPlaying: (b) => set({ isPlaying: b }),
-  setCurrentAudio: (url, meta = null) => set({ currentAudioUrl: url, currentAudioMeta: meta, isPlaying: !!url }),
+  setCurrentAudio: (url, meta = null, autoPlay = false) => set({ currentAudioUrl: url, currentAudioMeta: meta, isPlaying: autoPlay }),
 
   // System Stats
   systemStats: null,
@@ -1018,6 +1060,7 @@ export const useStudioStore = create<StudioState>()(
   inspectorCollapsed: true,
   toggleInspector: () => set((s) => ({ inspectorCollapsed: !s.inspectorCollapsed })),
   showExportModal: false, setShowExportModal: (b) => set({ showExportModal: b }),
+  exportBatchMode: false, setExportBatchMode: (b) => set({ exportBatchMode: b }),
   showTemplatesModal: false, setShowTemplatesModal: (b) => set({ showTemplatesModal: b }),
   toast: null,
   showToast: (message, type = 'info') => {

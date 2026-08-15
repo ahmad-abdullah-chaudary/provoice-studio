@@ -3,7 +3,7 @@ import { useStudioStore, Segment } from '@/store/useStudioStore';
 import {
   FileText, Plus, Trash2, ZoomIn, ZoomOut, Search, FileCode,
   Wand2, Layers, Loader2, CheckCircle2, AlertCircle, Clock,
-  ChevronRight, BookOpen, Sparkles, Play,
+  ChevronRight, BookOpen, Sparkles, Play, Download,
 } from 'lucide-react';
 
 // ─── Templates ────────────────────────────────────────────────────────────────
@@ -125,6 +125,8 @@ export const ScriptEditorView: React.FC = () => {
     updateSegment, setActiveSegmentId, renderAllSegments,
     selectedVoiceId, setSelectedVoiceId, voices, generationJob, startGeneration,
     showTemplatesModal, setShowTemplatesModal,
+    setShowExportModal, setExportBatchMode, setCurrentAudio,
+    showToast,
   } = useStudioStore();
 
   const activeSegment = segments.find(s => s.id === activeSegmentId) || segments[0];
@@ -135,6 +137,26 @@ export const ScriptEditorView: React.FC = () => {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; word: string } | null>(null);
   const [pendingDictWord, setPendingDictWord] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const applySpeedToAll = () => {
+    if (!activeSegment) return;
+    const targetSpeed = activeSegment.speed;
+    segments.forEach(seg => {
+      updateSegment(seg.id, { speed: targetSpeed });
+    });
+    showToast(`Applied ${targetSpeed.toFixed(2)}× speed to all ${segments.length} segments`, 'success');
+  };
+
+  const applyVoiceToAll = () => {
+    if (!activeSegment) return;
+    const targetVoice = activeSegment.voice || selectedVoiceId;
+    const voiceName = voices.find(v => v.id === targetVoice)?.name || targetVoice;
+    segments.forEach(seg => {
+      updateSegment(seg.id, { voice: targetVoice });
+    });
+    setSelectedVoiceId(targetVoice);
+    showToast(`Applied voice "${voiceName}" to all ${segments.length} segments`, 'success');
+  };
 
   const script = activeSegment?.script || '';
   const wordCount = script.trim().split(/\s+/).filter(Boolean).length;
@@ -254,7 +276,22 @@ export const ScriptEditorView: React.FC = () => {
               <SegmentItem
                 key={seg.id} segment={seg}
                 isActive={seg.id === activeSegmentId}
-                onClick={() => setActiveSegmentId(seg.id)}
+                onClick={() => {
+                  setActiveSegmentId(seg.id);
+                  if (seg.audioUrl) {
+                    setCurrentAudio(seg.audioUrl, {
+                      id: seg.id,
+                      timestamp: Date.now() / 1000,
+                      text: seg.script,
+                      voice: seg.voice,
+                      duration: seg.duration || 0,
+                      render_time: 0,
+                      file_size: 0,
+                      sample_rate: 24000,
+                      audio_url: seg.audioUrl,
+                    }, false);
+                  }
+                }}
                 onRemove={() => removeSegment(seg.id)}
               />
             ))}
@@ -263,12 +300,24 @@ export const ScriptEditorView: React.FC = () => {
           {/* Segment voice selector */}
           {activeSegment && (
             <div className="p-3 border-t border-border space-y-2">
-              <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Segment Voice</div>
+              <div className="flex items-center justify-between text-[10px] font-bold text-text-muted uppercase tracking-wider">
+                <span>Segment Voice</span>
+                {segments.length > 1 && (
+                  <button
+                    onClick={applyVoiceToAll}
+                    className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-accent/10 hover:bg-accent text-accent hover:text-white border border-accent/30 hover:border-accent transition-all cursor-pointer shadow-neo-xs"
+                    title="Select this voice for all segments"
+                  >
+                    Select for All
+                  </button>
+                )}
+              </div>
               <select
                 value={activeSegment.voice || selectedVoiceId}
                 onChange={e => {
                   const newVoice = e.target.value;
                   setSelectedVoiceId(newVoice);
+                  updateSegment(activeSegment.id, { voice: newVoice });
                 }}
                 className="w-full text-xs bg-surface border border-border rounded-input px-2 py-1.5 text-text-primary focus:outline-none focus:border-accent font-semibold text-accent"
               >
@@ -276,7 +325,18 @@ export const ScriptEditorView: React.FC = () => {
               </select>
               <div className="flex items-center justify-between text-[10px] font-semibold text-text-secondary">
                 <span>Speed</span>
-                <span className="font-mono text-accent">{activeSegment.speed.toFixed(2)}×</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-mono text-accent">{activeSegment.speed.toFixed(2)}×</span>
+                  {segments.length > 1 && (
+                    <button
+                      onClick={applySpeedToAll}
+                      className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-accent/10 hover:bg-accent text-accent hover:text-white border border-accent/30 hover:border-accent transition-all cursor-pointer"
+                      title="Adjust this speed across all segments"
+                    >
+                      Adjust to All
+                    </button>
+                  )}
+                </div>
               </div>
               <input type="range" min="0.5" max="2" step="0.05" value={activeSegment.speed}
                 onChange={e => updateSegment(activeSegment.id, { speed: parseFloat(e.target.value) })}
@@ -489,22 +549,39 @@ export const ScriptEditorView: React.FC = () => {
               <strong className="text-text-primary">~{estDisplay}</strong>
             </span>
           </div>
-          <div className="flex items-center gap-2">
-            {segments.length > 1 && (
-              <button onClick={renderAllSegments} disabled={isRendering}
-                className="btn-neo-secondary px-3 py-1.5 text-xs flex items-center gap-1.5 disabled:opacity-50">
-                <Layers className="w-3.5 h-3.5 text-accent" /> Render All ({segments.length})
-              </button>
-            )}
-            <button
-              onClick={() => activeSegment && startGeneration(script, activeSegment.id)}
-              disabled={isRendering || !script.trim()}
-              className="btn-neo px-4 py-1.5 text-xs flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed">
-              {isRendering
-                ? <><Loader2 className="w-3.5 h-3.5 text-white animate-spin" /> Rendering…</>
-                : <><Wand2 className="w-3.5 h-3.5 text-white" /> Render Segment</>}
-            </button>
-          </div>
+          {(() => {
+            const renderedSegments = segments.filter(s => s.status === 'done' && s.audioUrl);
+            return (
+              <div className="flex items-center gap-2">
+                {segments.length > 1 && (
+                  <button onClick={renderAllSegments} disabled={isRendering}
+                    className="btn-neo-secondary px-3 py-1.5 text-xs flex items-center gap-1.5 disabled:opacity-50">
+                    <Layers className="w-3.5 h-3.5 text-accent" /> Render All ({segments.length})
+                  </button>
+                )}
+                {renderedSegments.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setExportBatchMode(true);
+                      setShowExportModal(true);
+                    }}
+                    className="btn-neo-secondary px-3 py-1.5 text-xs flex items-center gap-1.5 text-success border-success/40 hover:border-success hover:bg-success/10 transition-all font-semibold shadow-neo-sm"
+                    title="Download all rendered segments as a ZIP file"
+                  >
+                    <Download className="w-3.5 h-3.5 text-success" /> Download All ({renderedSegments.length})
+                  </button>
+                )}
+                <button
+                  onClick={() => activeSegment && startGeneration(script, activeSegment.id)}
+                  disabled={isRendering || !script.trim()}
+                  className="btn-neo px-4 py-1.5 text-xs flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed">
+                  {isRendering
+                    ? <><Loader2 className="w-3.5 h-3.5 text-white animate-spin" /> Rendering…</>
+                    : <><Wand2 className="w-3.5 h-3.5 text-white" /> Render Segment</>}
+                </button>
+              </div>
+            );
+          })()}
         </div>
       </div>
     </div>

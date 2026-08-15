@@ -1,7 +1,7 @@
 [
   {
     "name": "Test",
-    "voice": "indic_hi_madhur",
+    "voice": "af_bella",
     "speed": 1.5,
     "sentenceGapMs": 200,
     "paragraphGapMs": 400,

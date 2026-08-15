@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useStudioStore, Voice } from '@/store/useStudioStore';
-import { Mic, Play, Check, Sparkles, Search, Globe, ShieldCheck, Zap, Languages } from 'lucide-react';
+import { Mic, Play, Check, Sparkles, Search, Globe, ShieldCheck, Zap, Languages, Square } from 'lucide-react';
 
 interface LanguageOption {
   code: string;
@@ -14,11 +14,17 @@ const LANGUAGES: LanguageOption[] = [
   { code: 'en-us', flag: '🇺🇸', name: 'English (US)' },
   { code: 'en-gb', flag: '🇬🇧', name: 'English (UK)' },
   { code: 'hi', flag: '🇮🇳', name: 'Hindi', badge: 'Devanagari + Hinglish Roman' },
-  { code: 'ur', flag: '🇵🇰', name: 'Urdu' },
+  { code: 'bn', flag: '🇮🇳', name: 'Bengali (বাংলা)' },
+  { code: 'ta', flag: '🇮🇳', name: 'Tamil (தமிழ்)' },
+  { code: 'te', flag: '🇮🇳', name: 'Telugu (తెలుగు)' },
+  { code: 'gu', flag: '🇮🇳', name: 'Gujarati (ગુજરાતી)' },
+  { code: 'kn', flag: '🇮🇳', name: 'Kannada (ಕನ್ನಡ)' },
+  { code: 'ml', flag: '🇮🇳', name: 'Malayalam (മലയാളം)' },
   { code: 'es', flag: '🇪🇸', name: 'Spanish' },
   { code: 'fr', flag: '🇫🇷', name: 'French' },
   { code: 'it', flag: '🇮🇹', name: 'Italian' },
   { code: 'ja', flag: '🇯🇵', name: 'Japanese' },
+  { code: 'pt', flag: '🇧🇷', name: 'Portuguese' },
   { code: 'zh', flag: '🇨🇳', name: 'Mandarin' },
 ];
 
@@ -26,11 +32,17 @@ const FLAG_MAP: Record<string, string> = {
   'en-us': '🇺🇸',
   'en-gb': '🇬🇧',
   hi: '🇮🇳',
-  ur: '🇵🇰',
+  bn: '🇮🇳',
+  ta: '🇮🇳',
+  te: '🇮🇳',
+  gu: '🇮🇳',
+  kn: '🇮🇳',
+  ml: '🇮🇳',
   es: '🇪🇸',
   fr: '🇫🇷',
   it: '🇮🇹',
   ja: '🇯🇵',
+  pt: '🇧🇷',
   zh: '🇨🇳',
 };
 
@@ -41,36 +53,58 @@ const getVoiceLang = (voice: Voice): string => {
     if (l === 'en-us' || l === 'en' || l === 'american') return 'en-us';
     if (l === 'en-gb' || l === 'british') return 'en-gb';
     if (l === 'hi' || l === 'hindi') return 'hi';
-    if (l === 'ur' || l === 'urdu') return 'ur';
+    if (l === 'bn' || l === 'bengali') return 'bn';
+    if (l === 'ta' || l === 'tamil') return 'ta';
+    if (l === 'te' || l === 'telugu') return 'te';
+    if (l === 'gu' || l === 'gujarati') return 'gu';
+    if (l === 'kn' || l === 'kannada') return 'kn';
+    if (l === 'ml' || l === 'malayalam') return 'ml';
     if (l === 'es' || l === 'spanish') return 'es';
     if (l === 'fr' || l === 'french') return 'fr';
     if (l === 'it' || l === 'italian') return 'it';
     if (l === 'ja' || l === 'japanese') return 'ja';
+    if (l === 'pt' || l === 'portuguese') return 'pt';
     if (l === 'zh' || l === 'mandarin' || l === 'chinese') return 'zh';
   }
 
-  // Fallback by voice ID prefix for Kokoro (af/am=US, bf/bm=UK, ef/em=ES, ff=FR, if=IT, jf/jm=JA, zf/zm=ZH, hf/hm=HI)
-  // For indic_ur_* voices the lang field handles them above
-  const prefix = (voice.id || '').slice(0, 2).toLowerCase();
+  // Fallback by voice ID prefix
+  const id = (voice.id || '').toLowerCase();
+  if (id.startsWith('silero_hindi') || id.startsWith('silero_rajasthani')) return 'hi';
+  if (id.startsWith('silero_bengali')) return 'bn';
+  if (id.startsWith('silero_tamil')) return 'ta';
+  if (id.startsWith('silero_telugu')) return 'te';
+  if (id.startsWith('silero_gujarati')) return 'gu';
+  if (id.startsWith('silero_kannada')) return 'kn';
+  if (id.startsWith('silero_malayalam')) return 'ml';
+
+  const prefix = id.slice(0, 2);
   if (prefix === 'af' || prefix === 'am') return 'en-us';
   if (prefix === 'bf' || prefix === 'bm') return 'en-gb';
-  if (prefix === 'ef' || prefix === 'em' || prefix === 'pf' || prefix === 'pm') return 'es';
+  if (prefix === 'ef' || prefix === 'em') return 'es';
   if (prefix === 'ff') return 'fr';
   if (prefix === 'if' || prefix === 'im') return 'it';
   if (prefix === 'jf' || prefix === 'jm') return 'ja';
+  if (prefix === 'pf' || prefix === 'pm') return 'pt';
   if (prefix === 'zf' || prefix === 'zm') return 'zh';
   if (prefix === 'hf' || prefix === 'hm') return 'hi';
 
   // Fallback by accent text string
   const accent = (voice.accent || '').toLowerCase();
+  if (accent.includes('bengali')) return 'bn';
+  if (accent.includes('tamil')) return 'ta';
+  if (accent.includes('telugu')) return 'te';
+  if (accent.includes('gujarati')) return 'gu';
+  if (accent.includes('kannada')) return 'kn';
+  if (accent.includes('malayalam')) return 'ml';
+  if (accent.includes('rajasthani')) return 'hi';
   if (accent.includes('american') || accent.includes('us')) return 'en-us';
   if (accent.includes('british') || accent.includes('uk')) return 'en-gb';
   if (accent.includes('hindi') || accent.includes('hinglish')) return 'hi';
-  if (accent.includes('urdu')) return 'ur';
   if (accent.includes('spanish')) return 'es';
   if (accent.includes('french')) return 'fr';
   if (accent.includes('italian')) return 'it';
   if (accent.includes('japanese')) return 'ja';
+  if (accent.includes('portuguese')) return 'pt';
   if (accent.includes('mandarin') || accent.includes('chinese')) return 'zh';
 
   return 'en-us';
@@ -110,7 +144,9 @@ export const VoiceLibraryView: React.FC = () => {
     return matchesSearch && matchesLanguage && matchesCategory && matchesGender;
   });
 
-  const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null);
+  const [loadingVoiceId, setLoadingVoiceId] = useState<string | null>(null);
+  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewPollRef = useRef<number | null>(null);
 
   const stopPreviewPolling = () => {
@@ -120,20 +156,52 @@ export const VoiceLibraryView: React.FC = () => {
     }
   };
 
-  useEffect(() => () => stopPreviewPolling(), []);
+  const stopCurrentAudio = () => {
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current.currentTime = 0;
+      currentAudioRef.current.src = '';
+      currentAudioRef.current = null;
+    }
+    setPlayingVoiceId(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopPreviewPolling();
+      stopCurrentAudio();
+    };
+  }, []);
 
   const handlePreviewAudio = async (voice: Voice) => {
-    if (previewingVoiceId === voice.id) return; // already loading
-    setPreviewingVoiceId(voice.id);
+    // If this voice is already playing -> stop it (toggle off)
+    if (playingVoiceId === voice.id) {
+      stopCurrentAudio();
+      return;
+    }
+
+    // If this voice is currently generating/loading -> cancel
+    if (loadingVoiceId === voice.id) {
+      stopPreviewPolling();
+      setLoadingVoiceId(null);
+      return;
+    }
+
+    // Stop any other currently playing or polling audio
+    stopCurrentAudio();
+    stopPreviewPolling();
+    setLoadingVoiceId(voice.id);
+
     try {
+      const voiceLang = getVoiceLang(voice);
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: voice.preview_text,
-          voice: voice.id,          // use THIS voice's id, NOT the store's selectedVoiceId
+          voice: voice.id,
           speed: 1.0,
-          lang: 'en-us',
+          lang: voiceLang,
           sentence_gap_ms: 300,
           paragraph_gap_ms: 600,
           dsp: { normalize: true, compressor: false, eq_bass: 0, eq_presence: 0, eq_treble: 0 },
@@ -141,29 +209,52 @@ export const VoiceLibraryView: React.FC = () => {
       });
       if (res.ok) {
         const { job_id } = await res.json();
-        // Poll until audio is ready, then play directly without touching the store's selected voice
         previewPollRef.current = window.setInterval(async () => {
           try {
             const jr = await fetch(`/api/jobs/${job_id}`);
-            if (!jr.ok) { stopPreviewPolling(); setPreviewingVoiceId(null); return; }
+            if (!jr.ok) {
+              stopPreviewPolling();
+              setLoadingVoiceId(null);
+              return;
+            }
             const job = await jr.json();
             if (job.status === 'complete' && job.audio_url) {
               stopPreviewPolling();
-              setPreviewingVoiceId(null);
+              setLoadingVoiceId(null);
+              // Stop any audio that might have started
+              stopCurrentAudio();
+
               const audio = new Audio(job.audio_url);
-              audio.play().catch(() => {});
+              currentAudioRef.current = audio;
+              setPlayingVoiceId(voice.id);
+
+              audio.onended = () => {
+                setPlayingVoiceId(null);
+                currentAudioRef.current = null;
+              };
+              audio.onerror = () => {
+                setPlayingVoiceId(null);
+                currentAudioRef.current = null;
+              };
+              audio.play().catch(() => {
+                setPlayingVoiceId(null);
+                currentAudioRef.current = null;
+              });
             } else if (job.status === 'failed') {
               stopPreviewPolling();
-              setPreviewingVoiceId(null);
+              setLoadingVoiceId(null);
             }
-          } catch { stopPreviewPolling(); setPreviewingVoiceId(null); }
+          } catch {
+            stopPreviewPolling();
+            setLoadingVoiceId(null);
+          }
         }, 400);
       } else {
-        setPreviewingVoiceId(null);
+        setLoadingVoiceId(null);
       }
     } catch {
       stopPreviewPolling();
-      setPreviewingVoiceId(null);
+      setLoadingVoiceId(null);
       useStudioStore.getState().showToast('Backend offline — start the server first', 'error');
     }
   };
@@ -177,7 +268,7 @@ export const VoiceLibraryView: React.FC = () => {
             <Mic className="w-6 h-6 text-accent" /> Voice Library & Multi-Language Models
           </h1>
           <p className="text-sm text-text-secondary mt-1">
-            Browse 50+ studio-quality CPU-optimized offline voice models across English, Hindi (Devanagari + Roman Hinglish), Spanish, French, Italian, Japanese, & Mandarin.
+            Browse 70 studio-quality 100% offline voice models across 15+ languages — powered by Kokoro ONNX &amp; Silero Indic Neural TTS with Aksharamukha ISO-15919 transliteration.
           </p>
         </div>
 
@@ -311,12 +402,30 @@ export const VoiceLibraryView: React.FC = () => {
                   "{voice.speaking_style}"
                 </p>
 
-                {/* Hindi Roman Transliteration Badge */}
-                {isHindi && (
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/10 text-amber-500 rounded-badge border border-amber-500/20 text-[11px] font-semibold">
-                    <Sparkles className="w-3 h-3 shrink-0" /> Devanagari + Roman Hinglish Auto-Transliteration
-                  </div>
-                )}
+                {/* Engine + Script Transliteration Badges */}
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  {(voice as any).engine && (
+                    <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-badge border text-[10px] font-bold ${
+                      (voice as any).engine === 'Silero Neural'
+                        ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
+                        : 'bg-accent/10 text-accent border-accent/20'
+                    }`}>
+                      {(voice as any).engine === 'Silero Neural' ? '🧠' : '⚡'} {(voice as any).engine}
+                    </div>
+                  )}
+
+                  {/* Script / Roman Hinglish Badge */}
+                  {isHindi && (
+                    <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-500/10 text-amber-500 rounded-badge border border-amber-500/20 text-[10px] font-semibold">
+                      <Sparkles className="w-3 h-3 shrink-0" /> Devanagari + Roman Hinglish
+                    </div>
+                  )}
+                  {['bn', 'ta', 'te', 'gu', 'kn', 'ml'].includes(langCode) && (
+                    <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-500/10 text-emerald-400 rounded-badge border border-emerald-500/20 text-[10px] font-semibold">
+                      <Sparkles className="w-3 h-3 shrink-0" /> Aksharamukha ISO-15919
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Specs Badges */}
@@ -336,13 +445,23 @@ export const VoiceLibraryView: React.FC = () => {
               <div className="pt-2 flex items-center gap-2.5">
                 <button
                   onClick={() => handlePreviewAudio(voice)}
-                  disabled={previewingVoiceId === voice.id}
-                  className="flex-1 btn-neo-secondary py-2 px-3 text-xs flex items-center justify-center gap-1.5 min-w-0 disabled:opacity-60 disabled:cursor-wait"
+                  className={`flex-1 py-2 px-3 text-xs flex items-center justify-center gap-1.5 min-w-0 font-bold rounded-button border-2 transition-all ${
+                    playingVoiceId === voice.id
+                      ? 'bg-rose-500 text-white border-text-primary shadow-neo-sm animate-pulse'
+                      : loadingVoiceId === voice.id
+                        ? 'btn-neo-secondary opacity-70 cursor-wait'
+                        : 'btn-neo-secondary'
+                  }`}
                 >
-                  {previewingVoiceId === voice.id ? (
+                  {loadingVoiceId === voice.id ? (
                     <>
                       <span className="w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0" />
-                      <span className="truncate">Loading...</span>
+                      <span className="truncate">Generating...</span>
+                    </>
+                  ) : playingVoiceId === voice.id ? (
+                    <>
+                      <Square className="w-3.5 h-3.5 fill-current shrink-0" />
+                      <span className="truncate">Stop</span>
                     </>
                   ) : (
                     <>

@@ -114,8 +114,21 @@ export const AudioPlayer: React.FC = () => {
     if (!audioRef.current || !currentAudioUrl) return;
     audioRef.current.src = currentAudioUrl;
     audioRef.current.load();
-    audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+    if (isPlaying) {
+      audioRef.current.play().catch(() => {});
+    } else {
+      audioRef.current.pause();
+    }
   }, [currentAudioUrl]);
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.play().catch(() => {});
+    } else {
+      audioRef.current.pause();
+    }
+  }, [isPlaying]);
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume;

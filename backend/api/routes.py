@@ -2,6 +2,8 @@ import os
 import re
 import time
 import json
+import zipfile
+import tempfile
 import asyncio
 import mimetypes
 import subprocess
@@ -14,7 +16,7 @@ from fastapi import APIRouter, HTTPException, File, UploadFile, Body, Form, Back
 from pydantic import BaseModel
 from fastapi.responses import FileResponse, JSONResponse
 
-from backend.engine.tts import tts_engine, EMOTION_PRESETS
+from backend.engine.tts import tts_engine, EMOTION_PRESETS, sanitize_voice_id
 from backend.engine.dsp import dsp_pipeline
 from backend.engine.dictionary import dictionary_engine
 from backend.engine.subtitles import subtitle_parser
@@ -158,7 +160,7 @@ def get_voices():
 async def generate_speech(payload: Dict[str, Any] = Body(...)):
     """Start async TTS generation. Returns job_id immediately; poll /api/jobs/{id} for progress."""
     text = payload.get("text", "").strip()
-    voice = payload.get("voice", "af_bella")
+    voice = sanitize_voice_id(payload.get("voice", "af_bella"))
     speed = min(max(float(payload.get("speed", 1.0)), 0.5), 2.0)
     lang = payload.get("lang", "en-us")
     sentence_gap = min(max(int(payload.get("sentence_gap_ms", 200)), 0), 3000)
@@ -358,6 +360,73 @@ def export_audio(payload: Dict[str, Any] = Body(...)):
         "download_url": f"/api/audio/{export_filename}",
         "format": target_format,
         "file_size": file_size,
+        "quality": quality,
+    }
+
+
+@router.post("/export-batch")
+def export_batch_audio(payload: Dict[str, Any] = Body(...)):
+    """Convert multiple generated WAV segments to target format/quality and bundle into a ZIP archive."""
+    segments = payload.get("segments", [])
+    target_format = payload.get("format", "mp3").lower()
+    quality = payload.get("quality", "Studio")
+    custom_name = payload.get("custom_name", "").strip()
+
+    if not segments:
+        raise HTTPException(status_code=400, detail="No segments provided for export")
+
+    base_zip_name = _safe_filename(custom_name) if custom_name else f"narration_batch_{int(time.time()*1000)}"
+    zip_filename = f"{base_zip_name}.zip"
+    zip_path = os.path.join(EXPORTS_DIR, zip_filename)
+    os.makedirs(EXPORTS_DIR, exist_ok=True)
+
+    bitrate_map = {"Draft": "128k", "Standard": "192k", "Studio": "320k", "Lossless": "320k"}
+    bitrate = bitrate_map.get(quality, "320k")
+
+    converted_count = 0
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for idx, seg in enumerate(segments, 1):
+                raw_filename = seg.get("filename") or (seg.get("audio_url") or "").split("/")[-1]
+                if not raw_filename:
+                    continue
+                safe_src = _safe_filename(raw_filename)
+                wav_path = _resolve_audio_file(safe_src)
+                if not os.path.exists(wav_path):
+                    continue
+
+                seg_title = _safe_filename(seg.get("name") or f"segment_{idx}")
+                out_name = f"{idx:02d}_{seg_title}.{target_format}"
+                out_path = os.path.join(temp_dir, out_name)
+
+                if target_format == "wav":
+                    zipf.write(wav_path, arcname=f"{idx:02d}_{seg_title}.wav")
+                    converted_count += 1
+                else:
+                    cmd = ["ffmpeg", "-y", "-i", wav_path, "-b:a", bitrate, out_path]
+                    try:
+                        result = subprocess.run(cmd, capture_output=True, timeout=60)
+                        if result.returncode == 0 and os.path.exists(out_path):
+                            zipf.write(out_path, arcname=out_name)
+                            converted_count += 1
+                        else:
+                            zipf.write(wav_path, arcname=f"{idx:02d}_{seg_title}.wav")
+                            converted_count += 1
+                    except Exception:
+                        zipf.write(wav_path, arcname=f"{idx:02d}_{seg_title}.wav")
+                        converted_count += 1
+
+    if converted_count == 0:
+        raise HTTPException(status_code=404, detail="None of the specified segment audio files could be found or exported")
+
+    file_size = os.path.getsize(zip_path)
+    return {
+        "download_url": f"/api/audio/{zip_filename}",
+        "filename": zip_filename,
+        "format": "zip",
+        "file_size": file_size,
+        "count": converted_count,
+        "target_format": target_format,
         "quality": quality,
     }
 
