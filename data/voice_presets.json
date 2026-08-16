@@ -23,5 +23,39 @@
       "lufs_normalize": true
     },
     "id": "preset_1786347485992"
+  },
+  {
+    "name": "test 2",
+    "voice": "silero_hindi_male",
+    "speed": 1,
+    "sentenceGapMs": 200,
+    "paragraphGapMs": 400,
+    "dspSettings": {
+      "silence_trim": true,
+      "noise_gate": false,
+      "equalizer": true,
+      "compressor": true,
+      "limiter": true,
+      "normalize": true,
+      "fade": true,
+      "eq_bass": 0,
+      "eq_presence": 0,
+      "eq_treble": 0,
+      "noise_gate_threshold": -50,
+      "compressor_threshold": -18,
+      "compressor_ratio": 3,
+      "normalize_peak": -1,
+      "de_esser": true,
+      "de_esser_threshold": -22,
+      "de_esser_ratio": 5,
+      "harmonic_exciter": true,
+      "harmonic_exciter_amount": 0.18,
+      "lufs_normalize": false,
+      "lufs_target": -14,
+      "micro_variation": true,
+      "breathing_injection": true,
+      "nlp_auto_emotion": true
+    },
+    "id": "preset_1786856838290"
   }
 ]

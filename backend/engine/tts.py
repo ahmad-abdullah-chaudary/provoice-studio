@@ -400,7 +400,15 @@ class KokoroTTSService:
                     if progress_callback:
                         progress_callback(seg_idx + 1, total_segs, seg_text[:60])
                     silero_audio, silero_sr = silero_tts_service.synthesize(
-                        seg_text, voice_id=seg_voice, speed=seg_speed
+                        seg_text,
+                        voice_id=seg_voice,
+                        speed=seg_speed,
+                        emotion=effective_emotion,
+                        whisper=ssml_seg.whisper,
+                        emphasis=ssml_seg.emphasis,
+                        micro_variation=micro_variation,
+                        sentence_gap_ms=sentence_gap_ms,
+                        paragraph_gap_ms=paragraph_gap_ms,
                     )
                     if silero_sr:
                         sample_rate = silero_sr
@@ -470,10 +478,11 @@ class KokoroTTSService:
                 if progress_callback:
                     progress_callback(seg_idx + 1, total_segs, chunk)
 
-        if not audio_segments:
+        valid_segments = [s for s in audio_segments if isinstance(s, np.ndarray) and s.size > 0]
+        if not valid_segments:
             return np.zeros(0, dtype=np.float32), sample_rate, 0.0
 
-        return np.concatenate(audio_segments), sample_rate, time.time() - start_time
+        return np.concatenate([s.flatten() for s in valid_segments]), sample_rate, time.time() - start_time
 
     def generate(self, text, voice="af_bella", speed=1.0, lang="en-us",
                  sentence_gap_ms=200, paragraph_gap_ms=400, emotion="normal",

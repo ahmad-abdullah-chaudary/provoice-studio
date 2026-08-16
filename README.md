@@ -90,6 +90,9 @@ Full inline voice scripting: pause, whisper, voice-switch, speed control, emphas
 ### 🎬 Multi-Track Timeline & Video Sync
 Full visual timeline editor with Narration, Music, SFX, and Video tracks. Auto-ducking music mixer, video dubbing overlay, and subtitle synchronization.
 
+### 📡 Batch Queue & Project Management
+Generate hundreds of audio clips in a background queue. Save/restore full project state with all segment voices, DSP settings, and scripts.
+
 ---
 
 ## 🌍 Voice Library
@@ -132,6 +135,8 @@ ProVoice Studio ships with **62 production voices** across 10 languages:
 | **FFmpeg** | Any recent | Audio convert, batch ZIP export, timeline mixing |
 | **Git** | Any | Clone repository |
 
+> **Windows users**: Download FFmpeg from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH.
+
 ---
 
 ### Step 1 — Clone the Repository
@@ -161,8 +166,25 @@ voices-v1.0.bin
 **Direct Download:**
 > 🔗 **[voices-v1.0.bin](https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin)** — Place as-is in the project root
 
-#### 🇮🇳 Silero PyTorch Indic (`v4_indic`)
-The Silero Indic model for offline Hindi voices is **automatically downloaded on first use** via `torch.hub`. No manual setup needed.
+#### 🇮🇳 Silero PyTorch Indic (Auto-Downloaded)
+The Silero Indic model for offline Hindi voices is **automatically downloaded on first use** via `torch.hub`. No manual steps required — just select any `Silero Indic` voice and it will download and cache itself.
+
+Alternatively, pre-download with:
+```python
+import torch
+model, _ = torch.hub.load('snakers4/silero-models', 'silero_tts', language='indic', speaker='v3_indic', trust_repo=True)
+```
+
+**Your project root should look like this after downloads:**
+```
+provoice-studio/
+├── kokoro-v1.0.onnx        ✅ ~310 MB (downloaded)
+├── voices-v1.0.bin         ✅ ~27 MB  (downloaded)
+├── backend/
+├── src/
+├── package.json
+└── ...
+```
 
 ---
 
@@ -233,6 +255,8 @@ When working with long-form scripts or YouTube videos with dozens of segments:
 
 ## 🎭 SSML Script Tags & NLP Auto-Emotion
 
+ProVoice Studio supports **inline script control tags** — type them directly into your script in the editor:
+
 ### Tag Reference
 
 | Tag | Example | Description |
@@ -257,6 +281,28 @@ When working with long-form scripts or YouTube videos with dozens of segments:
 | `whispering` | 0.80x | 180ms | Intimate, secret scenes |
 | `news` | 1.02x | 160ms | News, announcements |
 | `sher` | 0.80x | 500ms | Urdu Poetry, Ghazals, Shayari |
+
+### Example Script
+```
+Ek raat ne sab kuch badal diya. [pause:400]
+
+[emotion:dramatic]Do bhai, Chicago ki khatarnaak gang wars chhod kar, apne purane shehar wapas aaye.[/emotion]
+
+[voice:am_adam]He whispered, "We need to leave — tonight."[/voice]
+
+[whisper]She replied, "I know a way out."[/whisper]
+
+[speed:0.9]They ran into the darkness, hearts pounding.[/speed]
+```
+
+### NLP Auto-Emotion
+
+When enabled (default: **ON**), ProVoice Studio automatically analyzes each sentence for emotion signals and applies appropriate speed/gap presets:
+
+- 🔴 *"Suddenly the lights went out"* → **dramatic**
+- 😢 *"She wept alone in the rain"* → **sad**
+- ⚡ *"They won the championship!"* → **energetic**
+- 📰 *"According to official sources"* → **news**
 
 ---
 
@@ -294,37 +340,44 @@ ProVoice Studio/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── views/
-│   │   │   │   ├── ScriptEditorView.tsx   # Multi-segment editor, batch speed/voice controls
-│   │   │   │   ├── AudioInspector.tsx     # 10-stage DSP controls + Music Mixer
+│   │   │   │   ├── ScriptEditorView.tsx   # Multi-segment script editor + SSML toolbar
+│   │   │   │   ├── AudioInspector.tsx     # DSP controls panel
 │   │   │   │   ├── VoiceLibraryView.tsx   # 62-voice catalog with language filter
 │   │   │   │   ├── TimelineView.tsx       # Multi-track audio/video timeline
 │   │   │   │   ├── QueueView.tsx          # Batch generation queue
 │   │   │   │   ├── HistoryView.tsx        # Generated audio history
 │   │   │   │   └── SettingsView.tsx       # App preferences
-│   │   │   ├── ui/
-│   │   │   │   ├── ExportModal.tsx        # Single audio & Batch ZIP exporter
-│   │   │   │   └── KeyboardShortcuts.tsx  # Global studio hotkeys
-│   │   │   └── player/
-│   │   │       └── AudioPlayer.tsx        # Waveform visualizer & playback controller
+│   │   │   └── ...
 │   │   └── store/
-│   │       └── useStudioStore.ts          # Zustand global state management
+│   │       └── useStudioStore.ts          # Zustand global state (62 voice catalog, DSP settings)
 │   └── index.html
 │
 ├── 🐍 Backend (FastAPI + Python + Torch)
 │   ├── backend/
 │   │   ├── main.py                        # FastAPI application entry point
-│   │   ├── api/
-│   │   │   └── routes.py                  # REST API endpoints + async job runner
-│   │   └── engine/
-│   │       ├── tts.py                     # Kokoro ONNX engine & routing
-│   │       ├── silero_tts.py              # Silero v4_indic PyTorch engine & broadcast mastering
-│   │       ├── dsp.py                     # Studio DSP pipeline (LUFS, EQ, De-Esser, Exciter)
-│   │       ├── ssml_parser.py             # Defensive SSML parser + NLP emotion detector
-│   │       ├── hinglish.py                # Hinglish → Devanagari transliterator
-│   │       ├── mixer.py                   # Background music & auto-ducking mixer
-│   │       ├── timeline.py                # Multi-track timeline engine
-│   │       └── video.py                   # Video sync & narration overlay
-│   └── ...
+│   │   └── api/
+│   │       └── routes.py                  # 43 REST API endpoints + async job queue
+│   └── engine/
+│       ├── tts.py                         # Kokoro ONNX TTS + SSML integration
+│       ├── dsp.py                         # Studio DSP pipeline (LUFS, De-Esser, Exciter, Breaths, EQ)
+│       ├── ssml_parser.py                 # Defensive SSML parser + NLP emotion detector
+│       ├── hinglish.py                    # Hinglish → Devanagari transliterator
+│       ├── indic_tts.py                   # Silero PyTorch Indic offline voices
+│       ├── mixer.py                       # Background music & auto-ducking mixer
+│       ├── timeline.py                    # Multi-track timeline export engine
+│       └── video.py                       # Video sync & narration overlay
+│
+├── 📁 data/
+│   ├── exports/                           # Generated audio files (git-ignored)
+│   ├── history/                           # Generation history log (git-ignored)
+│   ├── projects/                          # Saved project JSON files (git-ignored)
+│   └── temp/                             # Temporary synthesis files (git-ignored)
+│
+├── kokoro-v1.0.onnx                       # ⚠️ Not in repo — download separately
+├── voices-v1.0.bin                        # ⚠️ Not in repo — download separately
+├── start.ps1                              # PowerShell one-click launcher
+├── start.bat                              # Windows CMD batch launcher
+└── .gitignore
 ```
 
 ---
@@ -345,10 +398,10 @@ The FastAPI backend exposes a full REST API at `http://localhost:8000`:
 | `GET` | `/api/history` | List all past generations |
 | `DELETE` | `/api/history/{id}` | Delete a history entry |
 | `GET` | `/api/projects` | List all saved projects |
-| `POST` | `/api/projects` | Save current project state |
-| `GET` | `/api/voice-presets` | List saved voice/DSP presets |
-| `POST` | `/api/voice-presets` | Save new voice/DSP preset |
-| `GET` | `/api/system/stats` | CPU, RAM, GPU utilization stats |
+| `POST` | `/api/projects` | Save current project |
+| `GET` | `/api/emotion-presets` | List all emotion presets |
+| `GET` | `/api/system/stats` | CPU, RAM, GPU stats |
+| `GET` | `/api/system/logs` | Backend system log stream |
 
 **Interactive API Docs:** `http://localhost:8000/docs` (Swagger UI)
 
@@ -374,8 +427,8 @@ The `start.ps1` launch script auto-detects your LAN IP and prints the network UR
 | **DSP Processing** | NumPy, SciPy (custom signal processing pipeline) |
 | **Backend** | FastAPI, Uvicorn, Python 3.10+ |
 | **Frontend** | React 18, TypeScript, Vite, Zustand |
-| **Styling** | TailwindCSS 3.4 & Neobrutalism UI |
-| **Runtime** | ONNX Runtime (CPU multi-thread) & PyTorch |
+| **Styling** | TailwindCSS 3.4 |
+| **Runtime** | ONNX Runtime (CPU multi-thread) |
 
 ---
 

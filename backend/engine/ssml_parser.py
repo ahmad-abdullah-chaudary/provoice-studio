@@ -78,7 +78,7 @@ _RE_UNKNOWN_TAG = re.compile(r'\[/?[a-z][^\]]*\]', re.IGNORECASE)
 # ─── NLP Auto-Emotion Detector ────────────────────────────────────────────────
 
 # Keyword sets per emotion — ordered from most-specific to least-specific.
-# Keep these tightly curated; broad words cause false-positive detections.
+# Includes English, Urdu (Nastaliq & Roman), and native Devanagari Hindi.
 _EMOTION_KEYWORDS: Dict[str, List[str]] = {
     "dramatic": [
         "suddenly", "silence", "darkness", "shadow", "fear", "terror", "horror",
@@ -88,6 +88,9 @@ _EMOTION_KEYWORDS: Dict[str, List[str]] = {
         "whispered a warning", "no one knew", "last chance", "too late",
         "ek raat", "sab kuch badal", "khatarnaak", "darr", "maut",
         "دشمن", "موت", "خطرہ", "اندھیرا", "خوف", "dushman", "maut", "khatara", "andhera",
+        "अचानक", "सन्नाटे", "सन्नाटा", "खौफ", "खतरनाक", "अंधेरा", "रहस्य", "डर", "चीख",
+        "मौत", "लाश", "साया", "छाया", "खून", "चौंक", "दहशत", "धमाका", "गायब", "रात",
+        "खतरा", "धोखा", "होश उड़", "खूनी", "भयानक", "कांप", "चीखा", "सन्नाटे में",
     ],
     "sad": [
         "tears", "grief", "sorrow", "broken", "lost", "farewell", "goodbye",
@@ -96,6 +99,8 @@ _EMOTION_KEYWORDS: Dict[str, List[str]] = {
         "forgive", "apology", "never returned", "gone forever", "dard", "udaas",
         "rota", "aansu", "bichad", "alvida",
         "آنسو", "تنہا", "درد", "غم", "بیوفا", "جدائی", "aansu", "tanha", "dard", "gham", "judaai",
+        "आंसू", "रोया", "रोने", "दर्द", "गम", "उदास", "तन्हा", "जुदाई", "टूटा", "तड़प",
+        "मायूस", "अफसोस", "बेबस", "अलविदा", "मातम", "तन्हाई", "दुख", "रो पड़ी", "तड़पते",
     ],
     "energetic": [
         "amazing", "incredible", "unbelievable", "wow", "fantastic", "awesome",
@@ -104,6 +109,8 @@ _EMOTION_KEYWORDS: Dict[str, List[str]] = {
         "fastest", "biggest", "best ever", "officially", "announced",
         "jazbaat", "josh", "azaadi", "zindagi",
         "جیت", "کامیابی", "جوش", "انقلاب", "شاندار", "jeet", "kamyabi", "josh", "inqilab",
+        "शानदार", "जीत", "जोश", "हंगामा", "जबरदस्त", "कमाल", "तेज़ी", "बिजली", "धूम",
+        "तूफान", "जिंदगी", "इंकलाब", "धमाकेदार", "चैंपियन", "फतेह", "ज़िंदाबाद", "आग लगा",
     ],
     "whispering": [
         "secret", "quietly", "softly", "hushed", "silent", "gentle", "slowly",
@@ -111,6 +118,7 @@ _EMOTION_KEYWORDS: Dict[str, List[str]] = {
         "no one heard", "between us", "don't tell", "private", "hidden",
         "dheere", "chup", "aaraam se",
         "آہستہ", "چپ", "راز", "خاموش", "ahista", "chup", "raaz", "khamosh",
+        "धीरे", "चुपके", "फुसफुसा", "खामोशी", "राज", "चुपचाप", "शांत", "आहिस्ता", "दबे पांव",
     ],
     "news": [
         "report", "breaking", "announced", "confirmed", "official", "sources",
@@ -118,10 +126,12 @@ _EMOTION_KEYWORDS: Dict[str, List[str]] = {
         "today marks", "as of today", "latest update", "news", "headline",
         "khabar", "samachar", "ghoshna",
         "خبر", "بیان", "حکومت", "اعلان", "کابینہ", "khabar", "bayan", "hukumat",
+        "समाचार", "घोषणा", "खबर", "पुष्टि", "अधिकारियों", "प्रशासन", "रिपोर्ट",
     ],
     "sher": [
         "شعر", "شاعری", "غزل", "مصرع", "شاعر", "دیوان",
         "shayari", "shair", "ghazal", "misra", "kalam", "urdu poetry",
+        "शायरी", "शेर", "ग़ज़ल", "मिसरा", "कलाम", "कविता",
     ],
 }
 
@@ -147,6 +157,10 @@ def detect_emotion(sentence: str) -> str:
             scores[emotion] = hits
 
     if not scores:
+        if "?" in sentence or "¿" in sentence:
+            return "dramatic"
+        if "!" in sentence:
+            return "energetic"
         return "normal"
 
     # Return emotion with most keyword hits; on tie, preserve dict order
