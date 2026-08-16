@@ -99,6 +99,7 @@ export const VideoTrimmerView: React.FC = () => {
   const [bypassResult, setBypassResult] = useState<{ filename: string; download_url: string } | null>(null);
   const [bypassAfterUrl, setBypassAfterUrl] = useState<string | null>(null);
   const [liveSimulate, setLiveSimulate] = useState<boolean>(true);
+  const [bypassStatusText, setBypassStatusText] = useState<string>('');
 
   const BYPASS_PRESETS: Record<string, Record<string, boolean | number>> = {
     light: {
@@ -391,14 +392,14 @@ export const VideoTrimmerView: React.FC = () => {
         const serverPath = data.video_path || data.video_url || data.audio_url;
         setBackendVideoPath(serverPath);
         if (data.duration) setVideoDuration(data.duration);
-        showToast(`Video "${file.name}" imported successfully!`, 'success');
+        showToast(`Video "${file.name}" imported and ready!`, 'success');
       } else {
-        setBackendVideoPath(localBlobUrl);
-        showToast('Video preview loaded', 'info');
+        setBackendVideoPath(null);
+        showToast('Video upload failed on server. Please try re-uploading.', 'error');
       }
     } catch {
-      setBackendVideoPath(localBlobUrl);
-      showToast('Video preview loaded', 'info');
+      setBackendVideoPath(null);
+      showToast('Could not reach backend server to upload video. Check server status.', 'error');
     } finally {
       setIsUploading(false);
     }
@@ -589,7 +590,24 @@ export const VideoTrimmerView: React.FC = () => {
       return;
     }
 
-    const activeVideoPath = backendVideoPath || videoUrl || 'upload';
+    if (!videoFile && !backendVideoPath) {
+      showToast('Please upload a video file first!', 'error');
+      return;
+    }
+
+    // Guard: if upload is still in progress, the backend path isn't ready yet
+    if (isUploading) {
+      showToast('Video is still uploading to server — please wait a moment and try again.', 'info');
+      return;
+    }
+
+    // Guard: video was selected locally but upload failed / backend path not received
+    if (!backendVideoPath) {
+      showToast('Video upload to server did not complete. Please re-select the video file.', 'error');
+      return;
+    }
+
+    const activeVideoPath = backendVideoPath;
 
     setIsTrimming(true);
     setCombinedUrl(null);
@@ -853,56 +871,54 @@ export const VideoTrimmerView: React.FC = () => {
               </div>
             )}
 
-            {/* Persistent Single Video Frame Container */}
-            <div className="relative bg-neutral-950 rounded-xl overflow-hidden border-2 border-text-primary/40 transition-all flex items-center justify-center min-h-[460px]">
+            {/* Directly Rendered Device View (No Redundant Outer Frame) */}
+            <div className="w-full flex items-center justify-center py-2 transition-all">
               {currentVideoSrc ? (
-                <div className="w-full flex items-center justify-center p-4">
-                  <div
-                    className={`transition-all duration-300 ${
-                      previewFrame === 'mobile'
-                        ? 'relative w-[270px] h-[510px] bg-neutral-950 border-[10px] border-neutral-800 rounded-[44px] shadow-2xl overflow-hidden flex flex-col justify-between items-center group ring-2 ring-white/10'
-                        : previewFrame === 'square'
-                        ? 'relative w-[340px] h-[340px] bg-black rounded-lg overflow-hidden border-2 border-border shadow-lg'
-                        : 'relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-border shadow-lg'
-                    }`}
-                  >
-                    {previewFrame === 'mobile' && (
-                      <>
-                        <span className="absolute -left-[12px] top-24 w-1 h-10 bg-neutral-700 rounded-l" />
-                        <span className="absolute -left-[12px] top-38 w-1 h-10 bg-neutral-700 rounded-l" />
-                        <span className="absolute -right-[12px] top-28 w-1 h-12 bg-neutral-700 rounded-r" />
+                <div
+                  className={`transition-all duration-300 ${
+                    previewFrame === 'mobile'
+                      ? 'relative w-[250px] sm:w-[270px] aspect-[9/16] bg-black border-[8px] border-neutral-800 rounded-[38px] shadow-2xl overflow-hidden flex flex-col justify-between items-center group ring-2 ring-white/10'
+                      : previewFrame === 'square'
+                      ? 'relative w-full max-w-[340px] aspect-square bg-black rounded-xl overflow-hidden border-2 border-border shadow-lg'
+                      : 'relative w-full aspect-video bg-black rounded-xl overflow-hidden border-2 border-border shadow-lg'
+                  }`}
+                >
+                  {previewFrame === 'mobile' && (
+                    <>
+                      <span className="absolute -left-[10px] top-20 w-1 h-8 bg-neutral-700 rounded-l" />
+                      <span className="absolute -left-[10px] top-32 w-1 h-8 bg-neutral-700 rounded-l" />
+                      <span className="absolute -right-[10px] top-24 w-1 h-10 bg-neutral-700 rounded-r" />
 
-                        <div className="absolute top-2.5 z-30 w-28 h-4 bg-black rounded-full flex items-center justify-center gap-2.5 border border-white/10 shadow-sm">
-                          <span className="w-2 h-2 rounded-full bg-neutral-800" />
-                          <span className="w-1.5 h-1.5 rounded-full bg-blue-900 animate-pulse" />
-                        </div>
-                      </>
-                    )}
+                      <div className="absolute top-2 z-30 w-24 h-3.5 bg-black rounded-full flex items-center justify-center gap-2 border border-white/10 shadow-sm">
+                        <span className="w-1.5 h-1.5 rounded-full bg-neutral-800" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-900 animate-pulse" />
+                      </div>
+                    </>
+                  )}
 
-                    <div className="w-full h-full bg-black flex items-center justify-center overflow-hidden relative">
-                      <video
-                        ref={videoRef}
-                        src={currentVideoSrc}
-                        onTimeUpdate={handleTimeUpdate}
-                        onLoadedMetadata={handleLoadedMetadata}
-                        onEnded={() => setIsPlaying(false)}
-                        className={`w-full h-full ${previewFrame === 'mobile' || previewFrame === 'square' ? 'object-cover' : 'object-contain'}`}
-                      />
-                    </div>
-
-                    {previewFrame === 'mobile' && (
-                      <>
-                        <div className="absolute bottom-1.5 z-30 w-32 h-1 bg-white/40 rounded-full" />
-                        <div className="absolute bottom-5 z-30 px-3 py-1 bg-black/75 backdrop-blur-md rounded-full border border-white/20 text-[10px] font-mono text-white flex items-center gap-1.5 shadow-lg">
-                          <Smartphone className="w-3 h-3 text-accent" /> 9:16 Shorts View
-                        </div>
-                      </>
-                    )}
+                  <div className="w-full h-full bg-black flex items-center justify-center overflow-hidden relative">
+                    <video
+                      ref={videoRef}
+                      src={currentVideoSrc}
+                      onTimeUpdate={handleTimeUpdate}
+                      onLoadedMetadata={handleLoadedMetadata}
+                      onEnded={() => setIsPlaying(false)}
+                      className={`w-full h-full ${previewFrame === 'mobile' || previewFrame === 'square' ? 'object-cover' : 'object-contain'}`}
+                    />
                   </div>
+
+                  {previewFrame === 'mobile' && (
+                    <>
+                      <div className="absolute bottom-1.5 z-30 w-28 h-1 bg-white/40 rounded-full" />
+                      <div className="absolute bottom-4 z-30 px-2.5 py-0.5 bg-black/75 backdrop-blur-md rounded-full border border-white/20 text-[9px] font-mono text-white flex items-center gap-1 shadow-lg pointer-events-none">
+                        <Smartphone className="w-2.5 h-2.5 text-accent" /> 9:16 Shorts
+                      </div>
+                    </>
+                  )}
                 </div>
               ) : (
-                <div className="text-center p-8 space-y-4">
-                  <Video className="w-12 h-12 text-neutral-500 mx-auto" />
+                <div className="text-center p-8 space-y-3 w-full border-2 border-dashed border-border rounded-xl">
+                  <Video className="w-10 h-10 text-neutral-500 mx-auto opacity-60" />
                   <p className="text-xs text-neutral-400">Import a video above to display live preview</p>
                 </div>
               )}
@@ -1146,9 +1162,14 @@ export const VideoTrimmerView: React.FC = () => {
 
                 <button
                   onClick={handleStartTrimming}
-                  className="w-full sm:w-auto px-7 py-3 text-xs font-bold text-white rounded-card bg-accent hover:bg-accent-hover border-2 border-text-primary shadow-neo-md hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2.5 cursor-pointer"
+                  disabled={isTrimming || isUploading}
+                  className="w-full sm:w-auto px-7 py-3 text-xs font-bold text-white rounded-card bg-accent hover:bg-accent-hover border-2 border-text-primary shadow-neo-md hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100"
                 >
-                  {isTrimming ? (
+                  {isUploading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin text-white" /> Uploading Video...
+                    </>
+                  ) : isTrimming ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin text-white" /> Rendering ({exportQuality.toUpperCase()})...
                     </>
@@ -1436,48 +1457,104 @@ export const VideoTrimmerView: React.FC = () => {
               <div className="flex items-center gap-2.5 w-full sm:w-auto">
                 <button
                   onClick={async () => {
+                    if (isUploading) { showToast('Video is still uploading — please wait', 'info'); return; }
+                    if (!backendVideoPath || backendVideoPath.startsWith('blob:')) {
+                      showToast('Please upload a video first before applying bypass', 'error');
+                      return;
+                    }
                     setIsBypassing(true);
+                    setBypassStatusText('Starting 15s preview...');
                     setBypassResult(null);
                     setBypassAfterUrl(null);
+
                     const payload: Record<string, unknown> = {
-                      video_path: backendVideoPath || videoUrl || 'upload',
+                      video_path: backendVideoPath,
                       profile: bypassProfile,
                       settings: bypassSettings,
                       is_preview: true,
                       preview_duration: 15.0,
                     };
+
                     try {
-                      let res = await fetch('/api/video/copyright-bypass', {
+                      // 1. Launch async job on backend
+                      let jobRes = await fetch('/api/video/copyright-bypass-job', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload),
                       });
-                      if (!res.ok && res.status === 404) {
-                        res = await fetch('/api/copyright-bypass', {
+                      if (!jobRes.ok) {
+                        jobRes = await fetch('/api/video/copyright-bypass', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify(payload),
                         });
+                        if (jobRes.ok) {
+                          const data = await jobRes.json();
+                          setBypassResult(data);
+                          setBypassAfterUrl(data.download_url);
+                          showToast(`15s preview ready! (Profile: ${data.profile})`, 'success');
+                          setIsBypassing(false);
+                          return;
+                        } else {
+                          let errMsg = `HTTP ${jobRes.status}`;
+                          try { const e = await jobRes.json(); errMsg = e.detail || e.error || errMsg; } catch {}
+                          showToast(`Bypass failed: ${errMsg}`, 'error');
+                          setIsBypassing(false);
+                          return;
+                        }
                       }
-                      if (res.ok) {
-                        const data = await res.json();
-                        setBypassResult(data);
-                        setBypassAfterUrl(data.download_url);
-                        showToast(`Instant 15s preview ready! (Profile: ${data.profile})`, 'success');
-                      } else {
-                        const err = await res.json();
-                        showToast(`Bypass failed: ${err.detail || 'Error processing'}`, 'error');
+
+                      const jobData = await jobRes.json();
+                      const jobId = jobData.job_id;
+                      if (!jobId) {
+                        showToast('Could not initialize preview job on server', 'error');
+                        setIsBypassing(false);
+                        return;
                       }
-                    } catch {
-                      showToast('Backend offline — start the server first', 'error');
-                    } finally {
+
+                      // 2. Poll job status
+                      let seconds = 0;
+                      const pollInterval = setInterval(async () => {
+                        seconds++;
+                        setBypassStatusText(`Rendering 15s sample (${seconds}s)...`);
+                        try {
+                          const statusRes = await fetch(`/api/video/job-status/${jobId}`);
+                          if (statusRes.ok) {
+                            const statusData = await statusRes.json();
+                            if (statusData.status === 'completed' && statusData.result) {
+                              clearInterval(pollInterval);
+                              setBypassResult(statusData.result);
+                              setBypassAfterUrl(statusData.result.download_url);
+                              showToast(`15s preview ready! (Profile: ${statusData.profile || bypassProfile})`, 'success');
+                              setIsBypassing(false);
+                            } else if (statusData.status === 'failed') {
+                              clearInterval(pollInterval);
+                              showToast(`Bypass failed: ${statusData.error || 'Encoding error'}`, 'error');
+                              setIsBypassing(false);
+                            }
+                          }
+                        } catch {
+                          // Ignore brief network hiccups during poll
+                        }
+
+                        if (seconds >= 120) {
+                          clearInterval(pollInterval);
+                          showToast('Preview timed out after 2 minutes. Try a lighter preset.', 'error');
+                          setIsBypassing(false);
+                        }
+                      }, 1000);
+
+                    } catch (err: unknown) {
+                      const msg = (err instanceof Error) ? err.message : String(err);
+                      showToast(`Request failed: ${msg}`, 'error');
                       setIsBypassing(false);
                     }
                   }}
-                  className="btn-neo flex-1 sm:flex-none px-5 py-2.5 text-xs font-bold flex items-center justify-center gap-2"
+                  disabled={isBypassing || isUploading}
+                  className="btn-neo flex-1 sm:flex-none px-5 py-2.5 text-xs font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isBypassing ? (
-                    <><RefreshCw className="w-4 h-4 animate-spin" /> Rendering...</>
+                    <><RefreshCw className="w-4 h-4 animate-spin" /> {bypassStatusText || 'Rendering...'}</>
                   ) : (
                     <><Zap className="w-4 h-4" /> ⚡ Instant Render (15s Sample)</>
                   )}
@@ -1485,44 +1562,92 @@ export const VideoTrimmerView: React.FC = () => {
 
                 <button
                   onClick={async () => {
+                    if (isUploading) { showToast('Video is still uploading — please wait', 'info'); return; }
+                    if (!backendVideoPath || backendVideoPath.startsWith('blob:')) {
+                      showToast('Please upload a video first before applying bypass', 'error');
+                      return;
+                    }
                     setIsBypassing(true);
+                    setBypassStatusText('Starting full video render...');
                     setBypassResult(null);
                     setBypassAfterUrl(null);
+
                     const payload: Record<string, unknown> = {
-                      video_path: backendVideoPath || videoUrl || 'upload',
+                      video_path: backendVideoPath,
                       profile: bypassProfile,
                       settings: bypassSettings,
                       is_preview: false,
                     };
+
                     try {
-                      let res = await fetch('/api/video/copyright-bypass', {
+                      let jobRes = await fetch('/api/video/copyright-bypass-job', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload),
                       });
-                      if (!res.ok && res.status === 404) {
-                        res = await fetch('/api/copyright-bypass', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify(payload),
-                        });
+                      if (!jobRes.ok) {
+                        if (jobRes.status === 404) {
+                          showToast('Backend update detected: please restart your backend server in terminal (Ctrl+C then python backend/main.py)', 'error');
+                          setIsBypassing(false);
+                          return;
+                        }
+                        let errMsg = `HTTP ${jobRes.status}`;
+                        try { const e = await jobRes.json(); errMsg = e.detail || e.error || errMsg; } catch {}
+                        showToast(`Bypass failed: ${errMsg}`, 'error');
+                        setIsBypassing(false);
+                        return;
                       }
-                      if (res.ok) {
-                        const data = await res.json();
-                        setBypassResult(data);
-                        setBypassAfterUrl(data.download_url);
-                        showToast(`Full bypass complete! Profile: ${data.profile}`, 'success');
-                      } else {
-                        const err = await res.json();
-                        showToast(`Bypass failed: ${err.detail || 'Error processing'}`, 'error');
+
+                      const jobData = await jobRes.json();
+                      const jobId = jobData.job_id;
+                      if (!jobId) {
+                        showToast('Could not initialize full render job on server', 'error');
+                        setIsBypassing(false);
+                        return;
                       }
-                    } catch {
-                      showToast('Backend offline — start the server first', 'error');
-                    } finally {
+
+                      // Poll full video job status
+                      let seconds = 0;
+                      const pollInterval = setInterval(async () => {
+                        seconds++;
+                        const mins = Math.floor(seconds / 60);
+                        const secs = seconds % 60;
+                        setBypassStatusText(`Rendering full video (${mins > 0 ? `${mins}m ` : ''}${secs}s)...`);
+                        try {
+                          const statusRes = await fetch(`/api/video/job-status/${jobId}`);
+                          if (statusRes.ok) {
+                            const statusData = await statusRes.json();
+                            if (statusData.status === 'completed' && statusData.result) {
+                              clearInterval(pollInterval);
+                              setBypassResult(statusData.result);
+                              setBypassAfterUrl(statusData.result.download_url);
+                              showToast(`Full bypass complete! (Profile: ${statusData.profile || bypassProfile})`, 'success');
+                              setIsBypassing(false);
+                            } else if (statusData.status === 'failed') {
+                              clearInterval(pollInterval);
+                              showToast(`Bypass failed: ${statusData.error || 'Encoding error'}`, 'error');
+                              setIsBypassing(false);
+                            }
+                          }
+                        } catch {
+                          // Ignore brief network hiccups during poll
+                        }
+
+                        if (seconds >= 3600) {
+                          clearInterval(pollInterval);
+                          showToast('Full render reached 1-hour limit. Check output directory.', 'info');
+                          setIsBypassing(false);
+                        }
+                      }, 1000);
+
+                    } catch (err: unknown) {
+                      const msg = (err instanceof Error) ? err.message : String(err);
+                      showToast(`Request failed: ${msg}`, 'error');
                       setIsBypassing(false);
                     }
                   }}
-                  className="btn-neo-secondary flex-1 sm:flex-none px-4 py-2.5 text-xs font-bold flex items-center justify-center gap-2"
+                  disabled={isBypassing || isUploading}
+                  className="btn-neo-secondary flex-1 sm:flex-none px-4 py-2.5 text-xs font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Film className="w-3.5 h-3.5" /> Full Video
                 </button>
@@ -1531,110 +1656,196 @@ export const VideoTrimmerView: React.FC = () => {
 
             {/* ─── ALWAYS-VISIBLE BEFORE & AFTER COMPARISON PREVIEW ─── */}
             <div className="space-y-3 pt-2">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
-                  <Eye className="w-4 h-4 text-accent" /> Before vs After Comparison
-                </h3>
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="text-text-muted text-[11px]">Real-time Preview:</span>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-2">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider flex items-center gap-2">
+                    <Eye className="w-4 h-4 text-accent" /> Before vs After Comparison
+                  </h3>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-surface border border-border text-text-muted">
+                    {previewFrame === 'mobile' ? '📱 9:16 Mobile View' : previewFrame === 'square' ? '🔳 1:1 Square View' : '🖥️ 16:9 Desktop View'}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2 text-xs flex-wrap">
+                  {/* Quick Device Ratio Switcher inside Comparison Header */}
+                  <div className="flex items-center gap-1 bg-surface p-0.5 rounded-lg border border-border text-[10px]">
+                    <button
+                      onClick={() => setPreviewFrame('mobile')}
+                      className={`px-2 py-0.5 rounded flex items-center gap-1 transition-all ${
+                        previewFrame === 'mobile' ? 'bg-accent text-white font-bold' : 'text-text-secondary hover:text-text-primary'
+                      }`}
+                      title="📱 9:16 Mobile"
+                    >
+                      <Smartphone className="w-3 h-3" /> 9:16
+                    </button>
+                    <button
+                      onClick={() => setPreviewFrame('desktop')}
+                      className={`px-2 py-0.5 rounded flex items-center gap-1 transition-all ${
+                        previewFrame === 'desktop' ? 'bg-accent text-white font-bold' : 'text-text-secondary hover:text-text-primary'
+                      }`}
+                      title="🖥️ 16:9 Desktop"
+                    >
+                      <Monitor className="w-3 h-3" /> 16:9
+                    </button>
+                    <button
+                      onClick={() => setPreviewFrame('square')}
+                      className={`px-2 py-0.5 rounded flex items-center gap-1 transition-all ${
+                        previewFrame === 'square' ? 'bg-accent text-white font-bold' : 'text-text-secondary hover:text-text-primary'
+                      }`}
+                      title="🔳 1:1 Square"
+                    >
+                      <Square className="w-3 h-3" /> 1:1
+                    </button>
+                  </div>
+
                   <button
                     onClick={() => setLiveSimulate(!liveSimulate)}
-                    className={`px-3 py-1 rounded-lg text-[11px] font-bold border transition-all ${
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${
                       liveSimulate
                         ? 'bg-accent text-white border-accent shadow-sm'
                         : 'bg-surface text-text-secondary border-border hover:text-text-primary'
                     }`}
                   >
-                    {liveSimulate ? '⚡ Live Sim ON' : 'Off'}
+                    {liveSimulate ? '⚡ Live Sim ON' : 'Live Sim Off'}
                   </button>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* BEFORE (ORIGINAL) */}
-                <div className="space-y-2 p-3.5 bg-surface rounded-xl border border-border shadow-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold text-text-primary uppercase tracking-wider flex items-center gap-1.5">
-                      🎬 Before (Original Raw Video)
-                    </span>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-surface-hover text-text-muted font-mono">
-                      No Filters
-                    </span>
-                  </div>
-                  <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border border-border">
-                    {videoUrl ? (
-                      <video
-                        src={videoUrl}
-                        className="w-full h-full object-contain"
-                        controls
-                        muted
-                      />
-                    ) : (
-                      <div className="w-full h-full flex flex-col items-center justify-center text-text-muted text-xs p-4 text-center">
-                        <Upload className="w-6 h-6 mb-1 opacity-50" />
-                        Import a video above to see the Before preview
-                      </div>
-                    )}
+                <div className="space-y-2 p-3.5 bg-surface rounded-xl border border-border shadow-sm flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[11px] font-bold text-text-primary uppercase tracking-wider flex items-center gap-1.5">
+                        🎬 Before (Original Raw Video)
+                      </span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-surface-hover text-text-muted font-mono">
+                        Raw Source
+                      </span>
+                    </div>
+
+                    <div
+                      className={`relative w-full bg-black rounded-lg overflow-hidden border border-border flex items-center justify-center transition-all duration-300 ${
+                        previewFrame === 'mobile'
+                          ? 'aspect-[9/16] max-h-[380px] mx-auto'
+                          : previewFrame === 'square'
+                          ? 'aspect-square max-h-[340px] mx-auto'
+                          : 'aspect-video'
+                      }`}
+                    >
+                      {videoUrl ? (
+                        <video
+                          src={videoUrl}
+                          className={`w-full h-full ${previewFrame === 'mobile' || previewFrame === 'square' ? 'object-cover' : 'object-contain'}`}
+                          controls
+                          muted
+                        />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-text-muted text-xs p-4 text-center">
+                          <Upload className="w-6 h-6 mb-1 opacity-50" />
+                          Import a video above to see the Before preview
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
                 {/* AFTER (TRANSFORMED / LIVE SIMULATION) */}
-                <div className="space-y-2 p-3.5 bg-surface rounded-xl border-2 border-accent/40 shadow-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold text-accent uppercase tracking-wider flex items-center gap-1.5">
-                      ✨ After {bypassAfterUrl ? '(Rendered Output Video)' : '(Live Simulation)'}
-                    </span>
-                    {bypassAfterUrl ? (
-                      <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-accent text-white font-bold shadow-sm">
-                        FFmpeg Rendered
+                <div className="space-y-2 p-3.5 bg-surface rounded-xl border-2 border-accent/40 shadow-sm flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[11px] font-bold text-accent uppercase tracking-wider flex items-center gap-1.5">
+                        ✨ After {bypassAfterUrl ? '(Rendered Output Video)' : '(Live Simulation)'}
                       </span>
-                    ) : (
-                      <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-accent/15 text-accent font-bold">
-                        Simulated Preview
-                      </span>
-                    )}
-                  </div>
+                      {bypassAfterUrl ? (
+                        <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-accent text-white font-bold shadow-sm">
+                          FFmpeg Rendered
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-accent/15 text-accent font-bold">
+                          Simulated Preview
+                        </span>
+                      )}
+                    </div>
 
-                  <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border border-accent/40">
-                    {bypassAfterUrl ? (
-                      <video
-                        src={bypassAfterUrl}
-                        className="w-full h-full object-contain"
-                        controls
-                        autoPlay
-                        muted
-                      />
-                    ) : videoUrl ? (
-                      <div className="w-full h-full overflow-hidden relative flex items-center justify-center">
+                    <div
+                      className={`relative w-full bg-black rounded-lg overflow-hidden border border-accent/40 flex items-center justify-center transition-all duration-300 ${
+                        previewFrame === 'mobile'
+                          ? 'aspect-[9/16] max-h-[380px] mx-auto'
+                          : previewFrame === 'square'
+                          ? 'aspect-square max-h-[340px] mx-auto'
+                          : 'aspect-video'
+                      }`}
+                    >
+                      {bypassAfterUrl ? (
                         <video
-                          src={videoUrl}
-                          style={liveSimulate ? (getSimulatedFilterStyle() as React.CSSProperties) : undefined}
-                          className="w-full h-full object-contain"
+                          src={bypassAfterUrl}
+                          className={`w-full h-full ${previewFrame === 'mobile' || previewFrame === 'square' ? 'object-cover' : 'object-contain'}`}
                           controls
+                          autoPlay
                           muted
                         />
-                        {liveSimulate && (
-                          <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-bold text-accent border border-accent/40 backdrop-blur-sm pointer-events-none">
-                            Live Visual Preview
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="w-full h-full flex flex-col items-center justify-center text-text-muted text-xs p-4 text-center">
-                        <ShieldAlert className="w-6 h-6 mb-1 text-accent opacity-50" />
-                        Import a video above to see the After preview
-                      </div>
-                    )}
+                      ) : videoUrl ? (
+                        <div className="w-full h-full overflow-hidden relative flex items-center justify-center">
+                          <video
+                            src={videoUrl}
+                            style={liveSimulate ? (getSimulatedFilterStyle() as React.CSSProperties) : undefined}
+                            className={`w-full h-full ${previewFrame === 'mobile' || previewFrame === 'square' ? 'object-cover' : 'object-contain'}`}
+                            controls
+                            muted
+                          />
+                          {liveSimulate && (
+                            <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-bold text-accent border border-accent/40 backdrop-blur-sm pointer-events-none">
+                              Live Visual Preview
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-text-muted text-xs p-4 text-center">
+                          <ShieldAlert className="w-6 h-6 mb-1 text-accent opacity-50" />
+                          Import a video above to see the After preview
+                        </div>
+                      )}
+                    </div>
                   </div>
 
+                  {/* Compact, Zero-Overflow Rendered Output Download Bar */}
                   {bypassResult && (
-                    <a
-                      href={bypassResult.download_url}
-                      download
-                      className="btn-neo w-full py-2.5 text-xs font-bold flex items-center justify-center gap-2 mt-2 shadow-sm"
-                    >
-                      <Download className="w-3.5 h-3.5" /> Download Bypassed Video ({bypassResult.filename})
-                    </a>
+                    <div className="mt-3 p-2.5 bg-accent/5 rounded-lg border border-accent/30 space-y-2">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-accent shrink-0" />
+                          <span className="font-bold text-text-primary text-[11px] truncate max-w-[200px]" title={bypassResult.filename}>
+                            {bypassResult.filename}
+                          </span>
+                        </div>
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-accent/20 text-accent font-semibold shrink-0">
+                          Rendered
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-0.5">
+                        <a
+                          href={bypassResult.download_url}
+                          download={bypassResult.filename || 'Bypassed_Video.mp4'}
+                          className="btn-neo flex-1 py-1.5 px-3 text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm text-center truncate"
+                        >
+                          <Download className="w-3.5 h-3.5 shrink-0" /> Download Video
+                        </a>
+                        <button
+                          onClick={() => {
+                            if (bypassResult.download_url) {
+                              navigator.clipboard.writeText(window.location.origin + bypassResult.download_url);
+                              showToast('Download link copied to clipboard!', 'success');
+                            }
+                          }}
+                          className="btn-neo-secondary py-1.5 px-3 text-xs font-bold flex items-center justify-center gap-1 shrink-0"
+                          title="Copy download link"
+                        >
+                          Copy Link
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>

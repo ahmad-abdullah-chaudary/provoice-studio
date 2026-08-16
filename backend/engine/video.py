@@ -245,39 +245,54 @@ class VideoSyncEngine:
         base_name = os.path.splitext(os.path.basename(video_path))[0]
         timestamp_id = int(time.time())
 
-        # Determine target resolution & video filter if requested
+        # Determine target resolution & video filter
+        # All aspect ratio conversions use scale+pad (letterbox/pillarbox) to preserve full content.
+        # scale=w:h:flags=lanczos — Lanczos high-quality resampling, upscales AND downscales cleanly.
         vf_filter = None
-        bitrate = "192k"
-        video_bitrate = "8M"
+        audio_bitrate = "320k"   # High-quality stereo audio
+        video_bitrate = "12M"    # Minimum default: crisp 1080p quality
+
+        def make_scale_pad(w: int, h: int) -> str:
+            """
+            High-Quality FFmpeg scale+pad filter chain.
+            1. scale with Lanczos resampling: upscales AND downscales with best quality
+            2. pad: center the result in the WxH canvas with black bars (letterbox / pillarbox)
+            3. setsar: correct sample aspect ratio metadata to 1:1
+            """
+            return (
+                f"scale={w}:{h}:flags=lanczos,"
+                f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,"
+                f"setsar=1"
+            )
 
         if export_quality == "2k":
-            video_bitrate = "16M"
+            video_bitrate = "25M"           # 2K: broadcast-grade quality
             if aspect_fit == "mobile_9_16":
-                vf_filter = "scale=1440:2560:force_original_aspect_ratio=increase,crop=1440:2560"
+                vf_filter = make_scale_pad(1440, 2560)   # 9:16 portrait @ 2K
             elif aspect_fit == "square_1_1":
-                vf_filter = "scale=1440:1440:force_original_aspect_ratio=increase,crop=1440:1440"
+                vf_filter = make_scale_pad(1440, 1440)   # 1:1 square @ 2K
             else:
-                vf_filter = "scale=2560:1440:force_original_aspect_ratio=decrease,pad=2560:1440:(ow-iw)/2:(oh-ih)/2"
+                vf_filter = make_scale_pad(2560, 1440)   # 16:9 landscape @ 2K
         elif export_quality == "4k":
-            video_bitrate = "32M"
+            video_bitrate = "50M"           # 4K: cinema-grade quality
             if aspect_fit == "mobile_9_16":
-                vf_filter = "scale=2160:3840:force_original_aspect_ratio=increase,crop=2160:3840"
+                vf_filter = make_scale_pad(2160, 3840)   # 9:16 portrait @ 4K UHD
             elif aspect_fit == "square_1_1":
-                vf_filter = "scale=2160:2160:force_original_aspect_ratio=increase,crop=2160:2160"
+                vf_filter = make_scale_pad(2160, 2160)   # 1:1 square @ 4K
             else:
-                vf_filter = "scale=3840:2160:force_original_aspect_ratio=decrease,pad=3840:2160:(ow-iw)/2:(oh-ih)/2"
+                vf_filter = make_scale_pad(3840, 2160)   # 16:9 landscape @ 4K UHD
         elif export_quality == "1080p":
-            video_bitrate = "8M"
+            video_bitrate = "12M"           # 1080p: high-quality streaming standard
             if aspect_fit == "mobile_9_16":
-                vf_filter = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+                vf_filter = make_scale_pad(1080, 1920)   # 9:16 portrait @ 1080p
             elif aspect_fit == "square_1_1":
-                vf_filter = "scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080"
+                vf_filter = make_scale_pad(1080, 1080)   # 1:1 square @ 1080p
             else:
-                vf_filter = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
+                vf_filter = make_scale_pad(1920, 1080)   # 16:9 landscape @ 1080p
         elif aspect_fit == "mobile_9_16":
-            vf_filter = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+            vf_filter = make_scale_pad(1080, 1920)       # 9:16 portrait @ native res
         elif aspect_fit == "square_1_1":
-            vf_filter = "scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080"
+            vf_filter = make_scale_pad(1080, 1080)       # 1:1 square @ native res
 
         for idx, item in enumerate(ranges, start=1):
             start_sec = float(item.get("start_sec", 0.0))
@@ -289,8 +304,10 @@ class VideoSyncEngine:
 
             success = False
 
-            # Fast stream copy (instant) when original aspect ratio is preserved
-            if aspect_fit == "original" and export_quality == "original":
+            # Fast stream copy (instant) ONLY when both quality AND aspect ratio are original
+            needs_reencode = (aspect_fit != "original") or (export_quality != "original")
+
+            if not needs_reencode:
                 cmd_copy = [
                     "ffmpeg", "-y",
                     "-ss", f"{start_sec:.3f}",
@@ -307,7 +324,7 @@ class VideoSyncEngine:
                 except Exception:
                     pass
 
-            # Fast Ultrafast Re-encode fallback
+            # High-Quality Re-encode: used when aspect_fit or export_quality changes are requested
             if not success:
                 cmd_encode = [
                     "ffmpeg", "-y",
@@ -318,13 +335,19 @@ class VideoSyncEngine:
                 if vf_filter:
                     cmd_encode += ["-vf", vf_filter]
 
+                # CRF 16 = near-lossless quality (lower CRF = higher quality; 0=lossless, 51=worst)
+                # preset slow = best compression efficiency at target bitrate (more detail preserved)
                 cmd_encode += [
-                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
-                    "-c:a", "aac", "-b:a", "192k",
+                    "-c:v", "libx264", "-preset", "slow", "-crf", "16",
+                    "-b:v", video_bitrate,
+                    "-maxrate", str(int(video_bitrate.replace("M", "")) * 2) + "M",
+                    "-bufsize", str(int(video_bitrate.replace("M", "")) * 4) + "M",
+                    "-c:a", "aac", "-b:a", audio_bitrate,
+                    "-movflags", "+faststart",   # Web-optimized: allows streaming while downloading
                     clip_path
                 ]
                 try:
-                    res = subprocess.run(cmd_encode, capture_output=True, timeout=30)
+                    res = subprocess.run(cmd_encode, capture_output=True, timeout=120)
                     if res.returncode == 0 and os.path.exists(clip_path):
                         success = True
                 except Exception as e:
@@ -478,16 +501,14 @@ class VideoSyncEngine:
             print(f"[VideoEngine] Zip creation error: {e}")
             return False
 
-    # ─── Copyright Bypass Engine ────────────────────────────────────────────
-
     @staticmethod
     def build_bypass_filters(settings: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
         """
         Build FFmpeg -vf and -af filter chains from a copyright bypass settings dict.
         Returns (video_filter_string, audio_filter_string) — either may be None.
         """
-        vf_parts = []
-        af_parts = []
+        vf_parts: List[str] = []
+        af_parts: List[str] = []
 
         # ── Visual Filters ──────────────────────────────────────────────────
 
@@ -495,54 +516,60 @@ class VideoSyncEngine:
         if settings.get("flip"):
             vf_parts.append("hflip")
 
-        # Slight Zoom (1.02x - 1.05x)
+        # Slight Zoom (1.01x - 1.08x): scale up, then crop back to original size
         zoom = float(settings.get("zoom", 0))
-        if zoom > 0:
+        if zoom > 1.0:
             zoom = max(1.01, min(1.08, zoom))
-            # Scale up then crop back to original size
-            vf_parts.append(f"scale=iw*{zoom:.3f}:ih*{zoom:.3f},crop=iw/{zoom:.3f}:ih/{zoom:.3f}")
+            # Use trunc() to guarantee integer dimensions — prevents FFmpeg "odd dimension" errors
+            vf_parts.append(
+                f"scale=trunc(iw*{zoom:.4f}/2)*2:trunc(ih*{zoom:.4f}/2)*2,"
+                f"crop=iw:ih"
+            )
 
-        # Hue Shift (degrees, -30 to +30)
+        # Hue Shift + Saturation — merged into single hue filter (two calls would conflict)
         hue = float(settings.get("hue", 0))
-        if hue != 0:
-            vf_parts.append(f"hue=h={hue:.1f}")
-
-        # Saturation adjustment (0.5 to 2.0, 1.0 = no change)
         saturation = float(settings.get("saturation", 1.0))
+        hue_args = []
+        if hue != 0:
+            hue_args.append(f"h={hue:.1f}")
         if abs(saturation - 1.0) > 0.01:
-            sat_clamped = max(0.5, min(2.0, saturation))
-            vf_parts.append(f"hue=s={sat_clamped:.2f}")
+            sat_clamped = max(0.3, min(3.0, saturation))
+            hue_args.append(f"s={sat_clamped:.2f}")
+        if hue_args:
+            vf_parts.append(f"hue={':'.join(hue_args)}")
 
-        # Brightness & Contrast
-        brightness = float(settings.get("brightness", 0.0))  # -0.1 to 0.1
-        contrast = float(settings.get("contrast", 1.0))      # 0.9 to 1.1
+        # Brightness & Contrast — use eq filter
+        brightness = float(settings.get("brightness", 0.0))
+        contrast = float(settings.get("contrast", 1.0))
         if abs(brightness) > 0.001 or abs(contrast - 1.0) > 0.001:
-            vf_parts.append(f"eq=brightness={brightness:.3f}:contrast={contrast:.3f}")
+            b_clamped = max(-1.0, min(1.0, brightness))
+            c_clamped = max(-1000.0, min(1000.0, contrast))
+            vf_parts.append(f"eq=brightness={b_clamped:.3f}:contrast={c_clamped:.3f}")
 
-        # Slight Rotation (degrees, 0.5 to 1.5)
+        # Slight Rotation (degrees) — correct FFmpeg rotate filter syntax
         rotation = float(settings.get("rotation", 0))
         if rotation != 0:
-            rad = rotation * 3.14159265 / 180
-            vf_parts.append(f"rotate={rad:.6f}:fillcolor=black@0:c=black")
+            rad = rotation * 3.14159265 / 180.0
+            vf_parts.append(f"rotate={rad:.6f}:c=black:ow=iw:oh=ih")
 
-        # Gaussian Blur (sigma 0.2 - 1.0)
+        # Gaussian Blur (sigma 0.1 - 2.0)
         blur = float(settings.get("blur", 0))
         if blur > 0:
             blur = max(0.1, min(2.0, blur))
             vf_parts.append(f"gblur=sigma={blur:.2f}")
 
-        # Speed Change — video part: setpts
+        # Speed Change — video part: setpts (affects frame timing)
         speed = float(settings.get("speed", 1.0))
-        if abs(speed - 1.0) > 0.001:
-            speed = max(0.9, min(1.15, speed))
+        if abs(speed - 1.0) > 0.005:
+            speed = max(0.5, min(2.0, speed))
             pts_factor = 1.0 / speed
-            vf_parts.append(f"setpts={pts_factor:.4f}*PTS")
+            vf_parts.append(f"setpts={pts_factor:.6f}*PTS")
 
-        # Letterbox (add black bars top/bottom — 10% height increase)
+        # Letterbox (add black bars top/bottom — standard cinematic bars)
         if settings.get("letterbox"):
-            vf_parts.append("pad=iw:ih*1.1:(ow-iw)/2:(oh-ih)/2:color=black")
+            vf_parts.append("pad=iw:iw*9/16:(ow-iw)/2:(oh-ih)/2:color=black")
 
-        # Color Grade (cinematic LUT via curves — warm lift + cool shadows)
+        # Color Grade (cinematic curves — warm highlights, cool shadows)
         if settings.get("color_grade"):
             vf_parts.append(
                 "curves=r='0/0 0.25/0.22 0.5/0.52 0.75/0.78 1/1':"
@@ -552,35 +579,49 @@ class VideoSyncEngine:
 
         # ── Audio Filters ───────────────────────────────────────────────────
 
-        # Pitch Shift (semitones, ±1 to ±5) — change rate then resample to preserve duration
+        # Pitch Shift: use atempo chain for speed-independent pitch shift
+        # We change sample rate then resample back — this shifts pitch without changing duration
         pitch_semitones = float(settings.get("pitch_semitones", 0))
         if pitch_semitones != 0:
-            pitch_semitones = max(-5, min(5, pitch_semitones))
-            factor = 2 ** (pitch_semitones / 12)
-            af_parts.append(f"asetrate=44100*{factor:.6f},aresample=44100,atempo={1.0/factor:.6f}")
+            pitch_semitones = max(-6.0, min(6.0, pitch_semitones))
+            factor = 2.0 ** (pitch_semitones / 12.0)
+            factor_clamped = max(0.5, min(2.0, factor))
+            inv_clamped = max(0.5, min(2.0, 1.0 / factor_clamped))
+            # asetrate shifts pitch, aresample restores sample rate, atempo corrects duration
+            af_parts.append(
+                f"asetrate=48000*{factor_clamped:.6f},"
+                f"aresample=48000,"
+                f"atempo={inv_clamped:.6f}"
+            )
 
-        # Speed/Tempo change — audio part (independent of video speed or combined)
-        if abs(speed - 1.0) > 0.001 and not settings.get("pitch_semitones"):
+        # Speed/Tempo change — audio part (only when not using pitch shift, to avoid double tempo)
+        elif abs(speed - 1.0) > 0.005:
             tempo = max(0.5, min(2.0, speed))
-            af_parts.append(f"atempo={tempo:.4f}")
+            # atempo only accepts 0.5-2.0; chain two filters for extremes
+            if tempo < 0.5:
+                af_parts.append(f"atempo=0.5,atempo={tempo/0.5:.4f}")
+            elif tempo > 2.0:
+                af_parts.append(f"atempo=2.0,atempo={tempo/2.0:.4f}")
+            else:
+                af_parts.append(f"atempo={tempo:.4f}")
 
-        # Background Noise / Audio Signature Dither
+        # Background Noise / Audio Signature Dither (subtle bass/treble shift)
         if settings.get("bg_noise"):
-            af_parts.append("bass=g=1.2:f=80,treble=g=-0.8:f=10000")
+            af_parts.append("bass=g=1.5:f=80:w=0.5,treble=g=-1.0:f=12000")
 
-        # EQ / Low-pass filter (reduce highs above 12kHz)
+        # EQ Low-pass: roll off highs above 12kHz (changes audio fingerprint)
         if settings.get("eq_lowpass"):
             af_parts.append("lowpass=f=12000,highpass=f=60")
 
-        # Volume Normalization (dynaudnorm — ultrafast zero-latency normalization)
+        # Volume Normalization
         if settings.get("normalize"):
             af_parts.append("dynaudnorm=f=150:g=15")
 
-        # Stereo to Mono and back (re-expand to stereo)
+        # Stereo Remix (changes channel matrix)
         if settings.get("stereo_remix"):
             af_parts.append("pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1")
 
-        # Subtle Audio Reverb (echo decay)
+        # Subtle Reverb (echo)
         if settings.get("reverb"):
             af_parts.append("aecho=0.8:0.88:60:0.4")
 
@@ -615,7 +656,7 @@ class VideoSyncEngine:
 
         vf, af = VideoSyncEngine.build_bypass_filters(settings)
 
-        # Check if video has audio stream
+        # Probe audio stream — if no audio, skip all audio filters
         has_audio = False
         try:
             probe = subprocess.run([
@@ -633,14 +674,12 @@ class VideoSyncEngine:
 
         cmd = ["ffmpeg", "-y"]
 
-        # Fast seek if time range or preview duration is requested
+        # Seek / clip range
         if preview_duration > 0:
             cmd += ["-ss", f"{start_sec:.3f}", "-t", f"{preview_duration:.3f}"]
-            # Optimize preview resolution for instant rendering
-            if vf:
-                vf = f"{vf},scale=-2:720"
-            else:
-                vf = "scale=-2:720"
+            # Add preview scale filter cleanly
+            preview_scale = "scale=1280:-2:force_original_aspect_ratio=decrease"
+            vf = f"{vf},{preview_scale}" if vf else preview_scale
         elif start_sec > 0 or end_sec > 0:
             cmd += ["-ss", f"{start_sec:.3f}", "-to", f"{end_sec:.3f}"]
 
@@ -651,29 +690,28 @@ class VideoSyncEngine:
         if af and has_audio:
             cmd += ["-af", af]
 
-        # Ultrafast multi-threaded encoding flags
+        # Use ultrafast preset and all CPU threads for 5x-10x rendering speed
         cmd += [
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-tune", "fastdecode",
             "-threads", "0",
             "-crf", "22",
-            "-shortest"
         ]
 
         if has_audio:
-            cmd += ["-c:a", "aac", "-ac", "2", "-b:a", "128k"]
+            cmd += ["-c:a", "aac", "-ac", "2", "-b:a", "192k"]
         else:
             cmd += ["-an"]
 
-        cmd.append(out_path)
+        cmd += ["-movflags", "+faststart", out_path]
 
-        # Dynamic timeout: 30s for preview/clips, 600s for full movie
-        timeout_sec = 35 if (preview_duration > 0 or (end_sec > 0 and end_sec - start_sec < 60)) else 600
+        # Timeout: 120s for preview/clips, 3600s (1 hour) for full movie
+        timeout_sec = 120 if preview_duration > 0 else 3600
 
         try:
             result = subprocess.run(cmd, capture_output=True, timeout=timeout_sec)
-            if result.returncode == 0 and os.path.exists(out_path):
+            if result.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 100:
                 return {
                     "success": True,
                     "output_path": out_path,
@@ -681,12 +719,13 @@ class VideoSyncEngine:
                     "download_url": f"/api/exports/trimmed/{out_name}",
                 }
             else:
-                stderr = result.stderr.decode("utf-8", errors="replace")[-500:]
-                return {"success": False, "error": f"FFmpeg error: {stderr}"}
+                stderr = result.stderr.decode("utf-8", errors="replace")[-800:]
+                print(f"[VideoEngine] Bypass FFmpeg error:\n{stderr}")
+                return {"success": False, "error": f"FFmpeg failed: {stderr}"}
         except subprocess.TimeoutExpired:
-            return {"success": False, "error": "Processing timeout — consider rendering in preview mode or trimming clips"}
-            return {"success": False, "error": "Processing timeout"}
+            return {"success": False, "error": f"Processing timeout ({timeout_sec}s)"}
         except Exception as e:
+            print(f"[VideoEngine] Bypass exception: {e}")
             return {"success": False, "error": str(e)}
 
     @staticmethod
@@ -729,6 +768,78 @@ class VideoSyncEngine:
         return presets.get(profile.lower(), {})
 
 
+class VideoJobManager:
+    """Manages asynchronous background video rendering tasks with status polling."""
+
+    def __init__(self):
+        import threading
+        self._jobs: Dict[str, Dict[str, Any]] = {}
+        self._lock = threading.Lock()
+
+    def start_bypass_job(
+        self,
+        video_path: str,
+        settings: Dict[str, Any],
+        output_dir: str,
+        start_sec: float = 0.0,
+        end_sec: float = 0.0,
+        preview_duration: float = 0.0,
+        profile: str = "custom",
+    ) -> str:
+        import threading
+        import uuid
+
+        job_id = f"vjob_{uuid.uuid4().hex[:12]}"
+        job_info = {
+            "id": job_id,
+            "status": "processing",
+            "progress_pct": 10,
+            "profile": profile,
+            "created_at": time.time(),
+            "result": None,
+            "error": None,
+        }
+
+        with self._lock:
+            self._jobs[job_id] = job_info
+
+        def _worker():
+            print(f"[VideoJob] Started async job {job_id} for {os.path.basename(video_path)}")
+            try:
+                res = VideoSyncEngine.apply_copyright_bypass(
+                    video_path=video_path,
+                    settings=settings,
+                    output_dir=output_dir,
+                    start_sec=start_sec,
+                    end_sec=end_sec,
+                    preview_duration=preview_duration,
+                )
+                with self._lock:
+                    if res.get("success"):
+                        self._jobs[job_id]["status"] = "completed"
+                        self._jobs[job_id]["progress_pct"] = 100
+                        self._jobs[job_id]["result"] = res
+                        print(f"[VideoJob] Completed async job {job_id}: {res.get('filename')}")
+                    else:
+                        self._jobs[job_id]["status"] = "failed"
+                        self._jobs[job_id]["error"] = res.get("error", "Bypass failed")
+                        print(f"[VideoJob] Failed async job {job_id}: {res.get('error')}")
+            except Exception as e:
+                with self._lock:
+                    self._jobs[job_id]["status"] = "failed"
+                    self._jobs[job_id]["error"] = str(e)
+                print(f"[VideoJob] Exception in async job {job_id}: {e}")
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        return job_id
+
+    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            return self._jobs.get(job_id)
+
+
 video_engine = VideoSyncEngine()
+video_job_manager = VideoJobManager()
 
 

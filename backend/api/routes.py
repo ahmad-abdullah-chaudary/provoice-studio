@@ -26,7 +26,7 @@ from backend.engine.batch import batch_queue
 from backend.engine.jobs import create_job, update_job, get_job, list_jobs
 from backend.engine.mixer import mixer
 from backend.engine.timeline import timeline_mixer
-from backend.engine.video import video_engine
+from backend.engine.video import video_engine, video_job_manager
 from backend.engine.webhooks import webhook_registry
 
 router = APIRouter()
@@ -1114,19 +1114,89 @@ def get_bypass_preset(profile: str):
     return {"profile": profile, "settings": settings}
 
 
+@router.post("/video/copyright-bypass-job")
+@router.post("/video/copyright-bypass-async")
+def apply_copyright_bypass_async_route(payload: Dict[str, Any] = Body(...)):
+    """
+    Start an asynchronous background job to apply copyright bypass transformations.
+    Returns job_id immediately so the client can poll status without HTTP timeout risks.
+    """
+    video_path = payload.get("video_path", "")
+    settings = payload.get("settings", {})
+    profile = payload.get("profile", "")
+    apply_mode = payload.get("apply_mode", "entire")
+    start_sec = float(payload.get("start_sec", 0.0))
+    end_sec = float(payload.get("end_sec", 0.0))
+    preview_duration = float(payload.get("preview_duration", 0.0))
+    if payload.get("is_preview", False) and preview_duration <= 0:
+        preview_duration = 15.0
+
+    if profile:
+        preset_settings = video_engine.get_bypass_preset(profile)
+        if preset_settings:
+            settings = {**preset_settings, **settings}
+
+    if not settings:
+        raise HTTPException(status_code=400, detail="No settings or preset provided")
+
+    # Resolve video_path
+    if video_path.startswith("/api/video/serve/") or video_path.startswith("/api/audio/"):
+        filename = video_path.split("/")[-1]
+        video_path = os.path.join(TEMP_DIR, filename)
+
+    if not os.path.exists(video_path):
+        recent = [
+            os.path.join(TEMP_DIR, f) for f in os.listdir(TEMP_DIR)
+            if f.startswith("upload_video_") or f.startswith("upload_")
+        ]
+        if recent:
+            recent.sort(key=os.path.getmtime, reverse=True)
+            video_path = recent[0]
+
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Source video file not found. Please upload a video first.")
+
+    clip_start = start_sec if apply_mode == "clip" else 0.0
+    clip_end = end_sec if apply_mode == "clip" else 0.0
+
+    job_id = video_job_manager.start_bypass_job(
+        video_path=video_path,
+        settings=settings,
+        output_dir=TRIMMED_DIR,
+        start_sec=clip_start,
+        end_sec=clip_end,
+        preview_duration=preview_duration,
+        profile=profile or "custom",
+    )
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        "status": "processing",
+        "profile": profile or "custom",
+    }
+
+
+@router.get("/video/job-status/{job_id}")
+def get_video_job_status(job_id: str):
+    """Poll the status of an asynchronous video processing job."""
+    job = video_job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return job
+
+
 @router.post("/video/copyright-bypass")
 @router.post("/copyright-bypass")
 def apply_copyright_bypass_route(payload: Dict[str, Any] = Body(...)):
     """
     Apply copyright bypass transformations to a video file.
-    Payload:
-      - video_path: server path or /api/video/serve/... URL
-      - settings: dict of transformation flags/values
-      - profile: optional preset name (light/medium/heavy/cinematic) — overrides settings if provided
-      - apply_mode: 'entire' (default) or 'clip'
-      - start_sec: float (only for clip mode)
-      - end_sec: float (only for clip mode)
+    Supports both synchronous rendering and async job delegation via payload.get('async').
     """
+    # If client requested async processing, delegate to async job
+    if payload.get("async", False):
+        return apply_copyright_bypass_async_route(payload)
+
     video_path = payload.get("video_path", "")
     settings = payload.get("settings", {})
     profile = payload.get("profile", "")
@@ -1187,3 +1257,4 @@ def apply_copyright_bypass_route(payload: Dict[str, Any] = Body(...)):
         "download_url": result["download_url"],
         "output_path": result["output_path"],
     }
+
