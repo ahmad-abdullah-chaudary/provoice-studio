@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { uploadWithProgress } from '@/utils/upload';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -881,15 +882,13 @@ export const useStudioStore = create<StudioState>()(
 
   addExternalFileToTimeline: async (file, targetTrackId, startSec = 0) => {
     const { showToast, addTimelineTrack, addClipToTrack, timelineTracks } = get();
-    const formData = new FormData();
-    formData.append('file', file);
 
     try {
-      showToast(`Uploading external file ${file.name}…`, 'info');
-      const res = await fetch('/api/audio/upload', { method: 'POST', body: formData });
-      if (res.ok) {
-        const data = await res.json();
-        // Backend tells us definitively if it's a video (audio extracted from it)
+      showToast(`Uploading ${file.name}...`, 'info');
+      const [, promise] = uploadWithProgress('/api/audio/upload', file);
+      const result = await promise;
+      if (result.ok && result.data) {
+        const data = result.data;
         const isVideo = data.is_video || file.type.startsWith('video/') || /\.(mp4|mov|mkv|webm|avi)$/i.test(file.name);
         const trackType: TimelineTrack['type'] = isVideo ? 'video' : 'music';
 
@@ -905,34 +904,33 @@ export const useStudioStore = create<StudioState>()(
           }
         }
 
-        const videoUrlToUse = data.video_url || undefined;
+        const videoUrlToUse = (data.video_url as string) || undefined;
 
         addClipToTrack(trackId, {
-          filePath: data.file_path || data.orig_path || '',
-          audioUrl: data.audio_url,
+          filePath: (data.file_path as string) || (data.orig_path as string) || '',
+          audioUrl: data.audio_url as string,
           videoUrl: videoUrlToUse,
           label: file.name,
           startTimeSec: startSec,
-          durationSec: data.duration || 5.0,
+          durationSec: (data.duration as number) || 5.0,
           volume: 1.0,
           clipType: isVideo ? 'video' : 'audio',
           crossfadeInSec: 0,
           crossfadeOutSec: 0,
         });
 
-        // If it's a video, also sync to videoSyncSource so VideoSyncView is ready
         if (isVideo) {
           get().setVideoSyncSource({
-            videoPath: data.file_path || data.orig_path || '',
+            videoPath: (data.file_path as string) || (data.orig_path as string) || '',
             videoUrl: videoUrlToUse,
             fileName: file.name,
-            extractedAudioUrl: data.audio_url,
+            extractedAudioUrl: data.audio_url as string,
           });
         }
 
-        showToast(`Imported ${file.name} (${(data.duration || 5).toFixed(1)}s) to Timeline`, 'success');
+        showToast(`Imported ${file.name} (${((data.duration as number) || 5).toFixed(1)}s) to Timeline`, 'success');
       } else {
-        showToast('External file upload failed', 'error');
+        showToast(`Upload failed: ${result.error || 'server error'}`, 'error');
       }
     } catch {
       showToast('Backend offline — cannot upload external file', 'error');

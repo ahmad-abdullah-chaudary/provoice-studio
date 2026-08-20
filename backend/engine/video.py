@@ -1,7 +1,9 @@
 import os
+import re
 import subprocess
 import time
 from typing import Dict, Any, Optional, List, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class VideoSyncEngine:
     """Video audio extraction and FFmpeg multiplexing engine."""
@@ -145,10 +147,11 @@ class VideoSyncEngine:
         # Mix with original video audio (optional with auto-ducking)
         if preserve_original_audio:
             if auto_ducking:
-                # Use sidechain ducking filter or volume envelope logic
+                # Split narration into two copies: one for sidechain, one for mix
+                parts.append(f"{narr_out}asplit=2[narr_sc][narr_mix]")
                 parts.append(f"[0:a]volume={original_audio_volume}[origvol]")
-                parts.append(f"[origvol]{narr_out}sidechaincompress=threshold=0.08:ratio=4:attack=20:release=300[ducked]")
-                parts.append(f"[ducked]{narr_out}amix=inputs=2:normalize=0[aout]")
+                parts.append(f"[origvol][narr_sc]sidechaincompress=threshold=0.08:ratio=4:attack=20:release=300[ducked]")
+                parts.append(f"[ducked][narr_mix]amix=inputs=2:normalize=0[aout]")
             else:
                 parts.append(f"[0:a]volume={original_audio_volume}[origvol]")
                 parts.append(f"[origvol]{narr_out}amix=inputs=2:normalize=0[aout]")
@@ -227,6 +230,24 @@ class VideoSyncEngine:
         return 0.0
 
     @staticmethod
+    def _probe_video_resolution(video_path: str) -> Tuple[int, int]:
+        """Probe source video width/height via ffprobe. Returns (width, height) or (0,0) on failure."""
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error",
+                 "-select_streams", "v:0",
+                 "-show_entries", "stream=width,height",
+                 "-of", "csv=p=0:s=x", video_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            if probe.returncode == 0 and "x" in probe.stdout.strip():
+                w, h = probe.stdout.strip().split("x")
+                return int(w), int(h)
+        except Exception:
+            pass
+        return 0, 0
+
+    @staticmethod
     def trim_video_batch(
         video_path: str,
         ranges: List[Dict[str, Any]],
@@ -234,80 +255,97 @@ class VideoSyncEngine:
         merge_all: bool = False,
         export_quality: str = "original",
         aspect_fit: str = "original",
+        progress_callback=None,
     ) -> Dict[str, Any]:
-        """Trim video with optional 2K/4K resolution encoding and aspect ratio fitting."""
+        """Trim video with optional 2K/4K resolution encoding and aspect ratio fitting.
+
+        Uses parallel FFmpeg workers (up to 4 concurrent clips) for fast batch processing.
+        Probes source resolution to skip unnecessary re-encode when source already matches target.
+        """
         if not os.path.exists(video_path):
             return {"success": False, "error": f"Source video not found: {video_path}"}
 
         os.makedirs(output_dir, exist_ok=True)
-        results = []
-        trimmed_file_paths = []
         base_name = os.path.splitext(os.path.basename(video_path))[0]
         timestamp_id = int(time.time())
 
-        # Determine target resolution & video filter
-        # All aspect ratio conversions use scale+pad (letterbox/pillarbox) to preserve full content.
-        # scale=w:h:flags=lanczos — Lanczos high-quality resampling, upscales AND downscales cleanly.
+        # ── Probe source video resolution once (shared across all clips) ────
+        src_w, src_h = VideoSyncEngine._probe_video_resolution(video_path)
+        if src_w > 0 and src_h > 0:
+            print(f"[VideoEngine] Source resolution: {src_w}x{src_h}")
+
+        # ── Determine target resolution & video filter ─────────────────────
         vf_filter = None
-        audio_bitrate = "320k"   # High-quality stereo audio
-        video_bitrate = "12M"    # Minimum default: crisp 1080p quality
+        audio_bitrate = "320k"
+        video_bitrate = "12M"
+        target_w, target_h = 0, 0
 
         def make_scale_pad(w: int, h: int) -> str:
-            """
-            High-Quality FFmpeg scale+pad filter chain.
-            1. scale with Lanczos resampling: upscales AND downscales with best quality
-            2. pad: center the result in the WxH canvas with black bars (letterbox / pillarbox)
-            3. setsar: correct sample aspect ratio metadata to 1:1
-            """
+            """Scale video to FILL the target frame then center-crop to exact WxH.
+            Used for 9:16 Shorts/Reels/TikTok conversion — video fills the entire
+            vertical frame with no black bars (center-crops the sides)."""
             return (
-                f"scale={w}:{h}:flags=lanczos,"
-                f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,"
+                f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,"
+                f"crop={w}:{h}:(in_w-{w})/2:(in_h-{h})/2,"
                 f"setsar=1"
             )
 
         if export_quality == "2k":
-            video_bitrate = "25M"           # 2K: broadcast-grade quality
+            video_bitrate = "25M"
             if aspect_fit == "mobile_9_16":
-                vf_filter = make_scale_pad(1440, 2560)   # 9:16 portrait @ 2K
+                target_w, target_h = 1440, 2560
             elif aspect_fit == "square_1_1":
-                vf_filter = make_scale_pad(1440, 1440)   # 1:1 square @ 2K
+                target_w, target_h = 1440, 1440
             else:
-                vf_filter = make_scale_pad(2560, 1440)   # 16:9 landscape @ 2K
+                target_w, target_h = 2560, 1440
         elif export_quality == "4k":
-            video_bitrate = "50M"           # 4K: cinema-grade quality
+            video_bitrate = "50M"
             if aspect_fit == "mobile_9_16":
-                vf_filter = make_scale_pad(2160, 3840)   # 9:16 portrait @ 4K UHD
+                target_w, target_h = 2160, 3840
             elif aspect_fit == "square_1_1":
-                vf_filter = make_scale_pad(2160, 2160)   # 1:1 square @ 4K
+                target_w, target_h = 2160, 2160
             else:
-                vf_filter = make_scale_pad(3840, 2160)   # 16:9 landscape @ 4K UHD
+                target_w, target_h = 3840, 2160
         elif export_quality == "1080p":
-            video_bitrate = "12M"           # 1080p: high-quality streaming standard
+            video_bitrate = "12M"
             if aspect_fit == "mobile_9_16":
-                vf_filter = make_scale_pad(1080, 1920)   # 9:16 portrait @ 1080p
+                target_w, target_h = 1080, 1920
             elif aspect_fit == "square_1_1":
-                vf_filter = make_scale_pad(1080, 1080)   # 1:1 square @ 1080p
+                target_w, target_h = 1080, 1080
             else:
-                vf_filter = make_scale_pad(1920, 1080)   # 16:9 landscape @ 1080p
+                target_w, target_h = 1920, 1080
         elif aspect_fit == "mobile_9_16":
-            vf_filter = make_scale_pad(1080, 1920)       # 9:16 portrait @ native res
+            target_w, target_h = 1080, 1920
         elif aspect_fit == "square_1_1":
-            vf_filter = make_scale_pad(1080, 1080)       # 1:1 square @ native res
+            target_w, target_h = 1080, 1080
 
-        for idx, item in enumerate(ranges, start=1):
+        if target_w > 0 and target_h > 0:
+            vf_filter = make_scale_pad(target_w, target_h)
+
+        # ── Smart fast-path: skip re-encode if source already matches target ─
+        can_stream_copy = False
+        if src_w > 0 and src_h > 0 and target_w > 0 and target_h > 0:
+            src_ratio = src_w / src_h
+            tgt_ratio = target_w / target_h
+            if abs(src_ratio - tgt_ratio) < 0.02 and src_w == target_w and src_h == target_h:
+                can_stream_copy = True
+                vf_filter = None  # No filter needed — stream copy is sufficient
+                print(f"[VideoEngine] Source matches target ({src_w}x{src_h}) — using fast stream copy")
+        elif export_quality == "original" and aspect_fit == "original":
+            can_stream_copy = True
+
+        # ── Define single-clip worker (runs in thread pool) ────────────────
+        def _trim_single_clip(args: Tuple) -> Dict[str, Any]:
+            idx, item = args
             start_sec = float(item.get("start_sec", 0.0))
             end_sec = float(item.get("end_sec", 0.0))
             duration = max(0.0, end_sec - start_sec)
-
             clip_name = f"Clip_{idx}_{base_name}_{timestamp_id}.mp4"
             clip_path = os.path.join(output_dir, clip_name)
-
             success = False
 
-            # Fast stream copy (instant) ONLY when both quality AND aspect ratio are original
-            needs_reencode = (aspect_fit != "original") or (export_quality != "original")
-
-            if not needs_reencode:
+            # Fast stream copy (instant) — when source matches target or both original
+            if can_stream_copy:
                 cmd_copy = [
                     "ffmpeg", "-y",
                     "-ss", f"{start_sec:.3f}",
@@ -315,7 +353,7 @@ class VideoSyncEngine:
                     "-i", video_path,
                     "-c", "copy",
                     "-avoid_negative_ts", "make_zero",
-                    clip_path
+                    clip_path,
                 ]
                 try:
                     res = subprocess.run(cmd_copy, capture_output=True, timeout=15)
@@ -324,7 +362,7 @@ class VideoSyncEngine:
                 except Exception:
                     pass
 
-            # High-Quality Re-encode: used when aspect_fit or export_quality changes are requested
+            # Re-encode with filters (when aspect/quality change is needed)
             if not success:
                 cmd_encode = [
                     "ffmpeg", "-y",
@@ -334,28 +372,67 @@ class VideoSyncEngine:
                 ]
                 if vf_filter:
                     cmd_encode += ["-vf", vf_filter]
-
-                # CRF 16 = near-lossless quality (lower CRF = higher quality; 0=lossless, 51=worst)
-                # preset slow = best compression efficiency at target bitrate (more detail preserved)
                 cmd_encode += [
-                    "-c:v", "libx264", "-preset", "slow", "-crf", "16",
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "22",
                     "-b:v", video_bitrate,
                     "-maxrate", str(int(video_bitrate.replace("M", "")) * 2) + "M",
                     "-bufsize", str(int(video_bitrate.replace("M", "")) * 4) + "M",
                     "-c:a", "aac", "-b:a", audio_bitrate,
-                    "-movflags", "+faststart",   # Web-optimized: allows streaming while downloading
-                    clip_path
+                    "-movflags", "+faststart",
+                    clip_path,
                 ]
+                if idx == 0:
+                    print(f"[VideoEngine] FFmpeg encode cmd: {' '.join(cmd_encode)}")
                 try:
-                    res = subprocess.run(cmd_encode, capture_output=True, timeout=120)
+                    res = subprocess.run(cmd_encode, capture_output=True, timeout=300)
                     if res.returncode == 0 and os.path.exists(clip_path):
                         success = True
+                    else:
+                        stderr_text = res.stderr.decode("utf-8", errors="replace")[-500:] if res.stderr else ""
+                        print(f"[VideoEngine] Clip {idx} encode failed (rc={res.returncode}): {stderr_text}")
                 except Exception as e:
                     print(f"[VideoEngine] Trim clip {idx} error: {e}")
 
+            # Verify output dimensions match target
+            if success and os.path.exists(clip_path) and target_w > 0 and target_h > 0:
+                try:
+                    probe = subprocess.run(
+                        ["ffprobe", "-v", "error",
+                         "-select_streams", "v:0",
+                         "-show_entries", "stream=width,height",
+                         "-of", "csv=p=0:s=x", clip_path],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if probe.returncode == 0 and "x" in probe.stdout.strip():
+                        out_w, out_h = probe.stdout.strip().split("x")
+                        out_w, out_h = int(out_w), int(out_h)
+                        if out_w != target_w or out_h != target_h:
+                            print(f"[VideoEngine] WARNING: Clip {idx} output {out_w}x{out_h} differs from target {target_w}x{target_h} — re-encoding with explicit pad fallback")
+                            fallback_filter = f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease:flags=lanczos,pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
+                            cmd_fallback = [
+                                "ffmpeg", "-y",
+                                "-ss", f"{start_sec:.3f}",
+                                "-to", f"{end_sec:.3f}",
+                                "-i", video_path,
+                                "-vf", fallback_filter,
+                                "-c:v", "libx264", "-preset", "medium", "-crf", "22",
+                                "-b:v", video_bitrate,
+                                "-maxrate", str(int(video_bitrate.replace("M", "")) * 2) + "M",
+                                "-bufsize", str(int(video_bitrate.replace("M", "")) * 4) + "M",
+                                "-c:a", "aac", "-b:a", audio_bitrate,
+                                "-movflags", "+faststart",
+                                clip_path,
+                            ]
+                            fb_res = subprocess.run(cmd_fallback, capture_output=True, timeout=300)
+                            if fb_res.returncode == 0 and os.path.exists(clip_path):
+                                print(f"[VideoEngine] Clip {idx} re-encoded with pad fallback → {target_w}x{target_h}")
+                            else:
+                                print(f"[VideoEngine] Clip {idx} fallback also failed")
+                except Exception as e:
+                    print(f"[VideoEngine] Clip {idx} dimension check error: {e}")
+
             if success and os.path.exists(clip_path):
-                trimmed_file_paths.append(clip_path)
-                results.append({
+                return {
                     "clip_number": idx,
                     "filename": clip_name,
                     "path": clip_path,
@@ -363,19 +440,57 @@ class VideoSyncEngine:
                     "start_sec": start_sec,
                     "end_sec": end_sec,
                     "duration": round(duration, 2),
-                    "status": "success"
-                })
+                    "status": "success",
+                }
             else:
-                results.append({
+                return {
                     "clip_number": idx,
                     "filename": clip_name,
                     "start_sec": start_sec,
                     "end_sec": end_sec,
                     "duration": round(duration, 2),
                     "status": "failed",
-                    "error": "FFmpeg trimming failed"
-                })
+                    "error": "FFmpeg trimming failed",
+                }
 
+        # ── Process all clips in parallel (up to 4 concurrent FFmpeg workers) ─
+        max_workers = min(4, len(ranges)) if len(ranges) > 0 else 1
+        clip_args = list(enumerate(ranges, start=1))
+        results: List[Dict[str, Any]] = []
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_idx = {
+                executor.submit(_trim_single_clip, args): args[0]
+                for args in clip_args
+            }
+            completed_count = 0
+            for future in as_completed(future_to_idx):
+                try:
+                    clip_result = future.result()
+                    results.append(clip_result)
+                except Exception as e:
+                    idx = future_to_idx[future]
+                    print(f"[VideoEngine] Clip {idx} unexpected error: {e}")
+                    clip_result = {
+                        "clip_number": idx,
+                        "filename": f"Clip_{idx}_{base_name}_{timestamp_id}.mp4",
+                        "start_sec": 0, "end_sec": 0, "duration": 0,
+                        "status": "failed", "error": str(e),
+                    }
+                    results.append(clip_result)
+
+                completed_count += 1
+                if progress_callback:
+                    try:
+                        progress_callback(completed_count, len(ranges))
+                    except Exception:
+                        pass
+
+        # Sort results by clip_number to maintain original order
+        results.sort(key=lambda r: r["clip_number"])
+        trimmed_file_paths = [r["path"] for r in results if r.get("path") and r["status"] == "success"]
+
+        # ── Optional: merge all clips into one reel ─────────────────────────
         combined_url = None
         if merge_all and len(trimmed_file_paths) > 0:
             combined_name = f"Merged_Sequence_{base_name}_{timestamp_id}.mp4"
@@ -389,7 +504,7 @@ class VideoSyncEngine:
 
             cmd_concat = [
                 "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                "-i", concat_txt, "-c", "copy", combined_path
+                "-i", concat_txt, "-c", "copy", combined_path,
             ]
             try:
                 res = subprocess.run(cmd_concat, capture_output=True, timeout=300)
@@ -406,7 +521,7 @@ class VideoSyncEngine:
             "success": True,
             "total_clips": len(results),
             "clips": results,
-            "combined_url": combined_url
+            "combined_url": combined_url,
         }
 
     @staticmethod
@@ -502,7 +617,7 @@ class VideoSyncEngine:
             return False
 
     @staticmethod
-    def build_bypass_filters(settings: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    def build_bypass_filters(settings: Dict[str, Any], source_sample_rate: int = 48000) -> Tuple[Optional[str], Optional[str]]:
         """
         Build FFmpeg -vf and -af filter chains from a copyright bypass settings dict.
         Returns (video_filter_string, audio_filter_string) — either may be None.
@@ -520,10 +635,10 @@ class VideoSyncEngine:
         zoom = float(settings.get("zoom", 0))
         if zoom > 1.0:
             zoom = max(1.01, min(1.08, zoom))
-            # Use trunc() to guarantee integer dimensions — prevents FFmpeg "odd dimension" errors
+            # Scale up by zoom factor, then crop back to original dimensions (true center-crop zoom)
             vf_parts.append(
                 f"scale=trunc(iw*{zoom:.4f}/2)*2:trunc(ih*{zoom:.4f}/2)*2,"
-                f"crop=iw:ih"
+                f"crop=trunc(iw/{zoom:.4f}/2)*2:trunc(ih/{zoom:.4f}/2)*2"
             )
 
         # Hue Shift + Saturation — merged into single hue filter (two calls would conflict)
@@ -565,9 +680,10 @@ class VideoSyncEngine:
             pts_factor = 1.0 / speed
             vf_parts.append(f"setpts={pts_factor:.6f}*PTS")
 
-        # Letterbox (add black bars top/bottom — standard cinematic bars)
+        # Letterbox (add cinematic black bars — targets 2.35:1 ultrawide aspect ratio)
         if settings.get("letterbox"):
-            vf_parts.append("pad=iw:iw*9/16:(ow-iw)/2:(oh-ih)/2:color=black")
+            # 2.35:1 letterbox: pad height to width/2.35, center vertically
+            vf_parts.append("pad=iw:trunc(iw/2.35/2)*2:0:(oh-ih)/2:color=black")
 
         # Color Grade (cinematic curves — warm highlights, cool shadows)
         if settings.get("color_grade"):
@@ -579,31 +695,30 @@ class VideoSyncEngine:
 
         # ── Audio Filters ───────────────────────────────────────────────────
 
-        # Pitch Shift: use atempo chain for speed-independent pitch shift
-        # We change sample rate then resample back — this shifts pitch without changing duration
+        # Pitch Shift: use asetrate+aresample+atempo for speed-independent pitch shift
+        # Uses actual source sample rate (not hardcoded 48kHz) for correct pitch
         pitch_semitones = float(settings.get("pitch_semitones", 0))
         if pitch_semitones != 0:
             pitch_semitones = max(-6.0, min(6.0, pitch_semitones))
             factor = 2.0 ** (pitch_semitones / 12.0)
             factor_clamped = max(0.5, min(2.0, factor))
             inv_clamped = max(0.5, min(2.0, 1.0 / factor_clamped))
-            # asetrate shifts pitch, aresample restores sample rate, atempo corrects duration
+            sr = source_sample_rate
             af_parts.append(
-                f"asetrate=48000*{factor_clamped:.6f},"
-                f"aresample=48000,"
+                f"asetrate={sr}*{factor_clamped:.6f},"
+                f"aresample={sr},"
                 f"atempo={inv_clamped:.6f}"
             )
 
         # Speed/Tempo change — audio part (only when not using pitch shift, to avoid double tempo)
         elif abs(speed - 1.0) > 0.005:
-            tempo = max(0.5, min(2.0, speed))
             # atempo only accepts 0.5-2.0; chain two filters for extremes
-            if tempo < 0.5:
-                af_parts.append(f"atempo=0.5,atempo={tempo/0.5:.4f}")
-            elif tempo > 2.0:
-                af_parts.append(f"atempo=2.0,atempo={tempo/2.0:.4f}")
+            if speed < 0.5:
+                af_parts.append(f"atempo=0.5,atempo={speed/0.5:.4f}")
+            elif speed > 2.0:
+                af_parts.append(f"atempo=2.0,atempo={speed/2.0:.4f}")
             else:
-                af_parts.append(f"atempo={tempo:.4f}")
+                af_parts.append(f"atempo={speed:.4f}")
 
         # Background Noise / Audio Signature Dither (subtle bass/treble shift)
         if settings.get("bg_noise"):
@@ -654,20 +769,30 @@ class VideoSyncEngine:
         out_name = f"{tag}{base_name}_{ts}.mp4"
         out_path = os.path.join(output_dir, out_name)
 
-        vf, af = VideoSyncEngine.build_bypass_filters(settings)
-
-        # Probe audio stream — if no audio, skip all audio filters
+        # Probe audio stream — if no audio, skip all audio filters; also get sample rate
         has_audio = False
+        src_sample_rate = 48000
         try:
             probe = subprocess.run([
                 "ffprobe", "-v", "error",
-                "-select_streams", "a",
-                "-show_entries", "stream=codec_type",
+                "-select_streams", "a:0",
+                "-show_entries", "stream=codec_type,sample_rate",
                 "-of", "csv=p=0", video_path
             ], capture_output=True, text=True, timeout=10)
-            has_audio = "audio" in probe.stdout.strip()
+            probe_lines = probe.stdout.strip().split("\n")
+            for line in probe_lines:
+                parts = line.strip().split(",")
+                if len(parts) >= 1 and parts[0] == "audio":
+                    has_audio = True
+                if len(parts) >= 2 and parts[0] == "audio":
+                    try:
+                        src_sample_rate = int(parts[1])
+                    except (ValueError, IndexError):
+                        pass
         except Exception:
             has_audio = False
+
+        vf, af = VideoSyncEngine.build_bypass_filters(settings, source_sample_rate=src_sample_rate)
 
         if not has_audio:
             af = None

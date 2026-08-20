@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { useStudioStore } from '@/store/useStudioStore';
+import { uploadWithProgress } from '@/utils/upload';
 import TimelineView from './TimelineView';
 import {
   Upload, Video, Play, Pause, DownloadCloud, CheckCircle2,
@@ -247,22 +248,18 @@ export const VideoSyncView: React.FC = () => {
       videoRef.current.load();
     }
 
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
-      const res = await fetch('/api/video/extract', { method: 'POST', body: formData });
-      if (res.ok) {
-        const data = await res.json();
+      const [, promise1] = uploadWithProgress('/api/video/extract', file);
+      const result = await promise1;
+      if (result.ok && result.data) {
+        const data = result.data;
         setVideoSyncSource({
-          videoPath: data.video_path,
-          videoUrl: data.video_url || localUrl,
+          videoPath: data.video_path as string,
+          videoUrl: (data.video_url as string) || localUrl,
           fileName: file.name,
-          extractedAudioUrl: data.audio_url,
+          extractedAudioUrl: data.audio_url as string,
         });
         showToast('Video loaded — reference audio & waveform extracted', 'success');
-
-        // Automatically sync into TimelineView so video clip appears in Timeline Editor as well
         addExternalFileToTimeline(file);
       } else {
         showToast('Audio extraction failed — local preview ready', 'info');
@@ -480,23 +477,21 @@ export const VideoSyncView: React.FC = () => {
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const formData = new FormData();
-      formData.append('file', file);
-
       try {
-        showToast(`Uploading ${file.name}…`, 'info');
-        const res = await fetch('/api/audio/upload', { method: 'POST', body: formData });
-        if (res.ok) {
-          const data = await res.json();
-          const filename = data.audio_url.split('/').pop() || file.name;
+        showToast(`Uploading ${file.name}...`, 'info');
+        const [, promise2] = uploadWithProgress('/api/audio/upload', file);
+        const result = await promise2;
+        if (result.ok && result.data) {
+          const data = result.data;
+          const filename = (data.audio_url as string).split('/').pop() || file.name;
           const color = MARKER_COLORS[markers.length % MARKER_COLORS.length];
           const newMarker: NarrationMarker = {
             id: `marker_${Date.now()}_${i}`,
             label: file.name,
-            audioUrl: data.audio_url,
+            audioUrl: data.audio_url as string,
             audioFilename: filename,
             startTimeSec: Math.round(currentTime * 10) / 10,
-            durationSec: data.duration || 5.0,
+            durationSec: (data.duration as number) || 5.0,
             volume: 1.0,
             speed: 1.0,
             color,

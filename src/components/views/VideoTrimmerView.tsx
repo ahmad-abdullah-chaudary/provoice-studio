@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useStudioStore } from '@/store/useStudioStore';
+import { uploadWithProgress, type UploadProgress, type UploadHandle } from '@/utils/upload';
 import {
   Scissors, Upload, Play, Pause, Download, Trash2,
   Plus, Clock, ArrowUp, ArrowDown, Film, CheckCircle2,
@@ -39,15 +40,28 @@ type AspectFitMode = 'original' | 'mobile_9_16' | 'square_1_1';
 export const VideoTrimmerView: React.FC = () => {
   const { showToast } = useStudioStore();
 
-  // Video State
+  // Video State — persisted across refresh via localStorage
   const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [backendVideoPath, setBackendVideoPath] = useState<string | null>(null);
-  const [videoDuration, setVideoDuration] = useState<number>(0);
+  const [videoUrl, setVideoUrl] = useState<string | null>(() => {
+    return localStorage.getItem('provoice_trimmer_video_server_url') || null;
+  });
+  const [backendVideoPath, setBackendVideoPath] = useState<string | null>(() => {
+    return localStorage.getItem('provoice_trimmer_backend_path') || null;
+  });
+  const [videoDuration, setVideoDuration] = useState<number>(() => {
+    const saved = localStorage.getItem('provoice_trimmer_video_duration');
+    return saved ? parseFloat(saved) : 0;
+  });
+  const [videoFileName, setVideoFileName] = useState<string | null>(() => {
+    return localStorage.getItem('provoice_trimmer_video_filename') || null;
+  });
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const uploadHandleRef = useRef<UploadHandle | null>(null);
   const [isDragging, setIsDragging] = useState<boolean>(false);
 
   // Dedicated Clip Preview State
@@ -91,6 +105,12 @@ export const VideoTrimmerView: React.FC = () => {
   const [combinedUrl, setCombinedUrl] = useState<string | null>(null);
   const [zipDownloadUrl, setZipDownloadUrl] = useState<string | null>(null);
   const [isZipping, setIsZipping] = useState<boolean>(false);
+
+  // Trim Progress State
+  const [trimProgress, setTrimProgress] = useState<number>(0);
+  const [trimTotal, setTrimTotal] = useState<number>(0);
+  const [trimElapsedTime, setTrimElapsedTime] = useState<number>(0);
+  const trimTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Copyright Bypass State
   const [showBypassPanel, setShowBypassPanel] = useState<boolean>(true);
@@ -254,6 +274,13 @@ export const VideoTrimmerView: React.FC = () => {
     localStorage.setItem('provoice_trimmer_results', JSON.stringify(trimmedResults));
   }, [trimmedResults]);
 
+  // Cleanup trim timer on unmount
+  useEffect(() => {
+    return () => {
+      if (trimTimerRef.current) clearInterval(trimTimerRef.current);
+    };
+  }, []);
+
   // Spacebar = toggle play/pause (only when video is loaded, skip if user is typing in input/textarea)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -371,38 +398,77 @@ export const VideoTrimmerView: React.FC = () => {
     setSegments(parsed);
   }, [rawText]);
 
-  // Upload Video File
+  // Cancel any in-progress upload
+  const cancelUpload = () => {
+    uploadHandleRef.current?.abort();
+    uploadHandleRef.current = null;
+    setIsUploading(false);
+    setUploadProgress(null);
+    setUploadError('Upload cancelled.');
+    showToast('Upload cancelled.', 'info');
+  };
+
+  // Upload Video File — with real-time progress bar + automatic retry + cancel support
   const uploadVideoFile = async (file: File) => {
     setVideoFile(file);
-    const localBlobUrl = URL.createObjectURL(file);
-    setVideoUrl(localBlobUrl);
+    setUploadError(null);
     setActivePreviewClip(null);
     setIsUploading(true);
+    setUploadProgress(null);
 
-    const formData = new FormData();
-    formData.append('file', file);
+    // Show local preview instantly (blob URL — fast, no server needed)
+    const localBlobUrl = URL.createObjectURL(file);
+    setVideoUrl(localBlobUrl);
 
-    try {
-      let res = await fetch('/api/video/upload', { method: 'POST', body: formData });
-      if (!res.ok) res = await fetch('/api/upload', { method: 'POST', body: formData });
-      if (!res.ok) res = await fetch('/api/audio/upload', { method: 'POST', body: formData });
+    // Try primary endpoint, then fallbacks
+    const endpoints = ['/api/video/upload', '/api/upload', '/api/audio/upload'];
+    let lastError = '';
 
-      if (res.ok) {
-        const data = await res.json();
-        const serverPath = data.video_path || data.video_url || data.audio_url;
+    for (const endpoint of endpoints) {
+      const [handle, promise] = uploadWithProgress(endpoint, file, (progress) => {
+        setUploadProgress(progress);
+      });
+      uploadHandleRef.current = handle;
+
+      const result = await promise;
+      uploadHandleRef.current = null;
+
+      if (result.ok && result.data) {
+        const data = result.data;
+        const serverPath = (data.video_path as string) || (data.video_url as string) || (data.audio_url as string);
+        const serverUrl = (data.video_url as string) || `/api/video/serve/${(data.video_path as string || '').split(/[/\\]/).pop()}`;
+        const dur = (data.duration as number) || 0;
+
         setBackendVideoPath(serverPath);
-        if (data.duration) setVideoDuration(data.duration);
+        setVideoDuration(dur);
+        setVideoFileName(file.name);
+
+        // Use server URL for persistence (blob URLs die on refresh)
+        setVideoUrl(serverUrl);
+
+        // Persist to localStorage so video survives page refresh
+        localStorage.setItem('provoice_trimmer_backend_path', serverPath);
+        localStorage.setItem('provoice_trimmer_video_server_url', serverUrl);
+        localStorage.setItem('provoice_trimmer_video_filename', file.name);
+        if (dur > 0) localStorage.setItem('provoice_trimmer_video_duration', String(dur));
+
         showToast(`Video "${file.name}" imported and ready!`, 'success');
-      } else {
-        setBackendVideoPath(null);
-        showToast('Video upload failed on server. Please try re-uploading.', 'error');
+        setIsUploading(false);
+        setUploadProgress(null);
+        return;
       }
-    } catch {
-      setBackendVideoPath(null);
-      showToast('Could not reach backend server to upload video. Check server status.', 'error');
-    } finally {
-      setIsUploading(false);
+      lastError = result.error || `Server returned ${result.status}`;
+
+      // If user cancelled, don't try fallback endpoints
+      if (lastError === 'Upload cancelled.') break;
     }
+
+    // All endpoints failed
+    setBackendVideoPath(null);
+    setUploadError(lastError);
+    showToast(`Upload failed: ${lastError}. Please try again.`, 'error');
+    setIsUploading(false);
+    setUploadProgress(null);
   };
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -583,7 +649,7 @@ export const VideoTrimmerView: React.FC = () => {
     showToast(`Clip #${clipNum} removed from results`, 'info');
   };
 
-  // Execute FFmpeg Batch Trimming
+  // Execute FFmpeg Batch Trimming (with real-time progress tracking)
   const handleStartTrimming = async () => {
     if (segments.length === 0) {
       showToast('Please enter or paste timestamp ranges to trim!', 'info');
@@ -595,13 +661,11 @@ export const VideoTrimmerView: React.FC = () => {
       return;
     }
 
-    // Guard: if upload is still in progress, the backend path isn't ready yet
     if (isUploading) {
       showToast('Video is still uploading to server — please wait a moment and try again.', 'info');
       return;
     }
 
-    // Guard: video was selected locally but upload failed / backend path not received
     if (!backendVideoPath) {
       showToast('Video upload to server did not complete. Please re-select the video file.', 'error');
       return;
@@ -612,6 +676,15 @@ export const VideoTrimmerView: React.FC = () => {
     setIsTrimming(true);
     setCombinedUrl(null);
     setZipDownloadUrl(null);
+    setTrimProgress(0);
+    setTrimTotal(segments.length);
+    setTrimElapsedTime(0);
+
+    // Start elapsed timer
+    const timerStart = Date.now();
+    trimTimerRef.current = setInterval(() => {
+      setTrimElapsedTime(Math.floor((Date.now() - timerStart) / 1000));
+    }, 1000);
 
     const rangesPayload = segments.map((seg) => ({
       clip_number: seg.index,
@@ -619,42 +692,105 @@ export const VideoTrimmerView: React.FC = () => {
       end_sec: seg.endSec,
     }));
 
-    const reqBody = JSON.stringify({
+    const reqBody = {
       video_path: activeVideoPath,
       ranges: rangesPayload,
       merge_all: mergeAll,
       export_quality: exportQuality,
       aspect_fit: aspectFit,
-    });
+    };
 
     try {
-      let res = await fetch('/api/video/trim-batch', {
+      // Start async trim job
+      let jobRes = await fetch('/api/video/trim-batch-async', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: reqBody,
+        body: JSON.stringify(reqBody),
       });
-
-      if (!res.ok) {
-        res = await fetch('/api/trim-batch', {
+      if (!jobRes.ok) {
+        jobRes = await fetch('/api/trim-batch-async', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: reqBody,
+          body: JSON.stringify(reqBody),
         });
       }
 
-      if (res.ok) {
-        const data = await res.json();
-        setTrimmedResults(data.clips || []);
-        setShowResultsPanel(true);
-        if (data.combined_url) setCombinedUrl(data.combined_url);
-        showToast(`Successfully trimmed ${data.total_clips} clip(s)!`, 'success');
-      } else {
-        const err = await res.json();
-        showToast(`Batch trimming failed: ${err.detail || 'Error'}`, 'error');
+      if (!jobRes.ok) {
+        // Fallback to synchronous endpoint
+        let syncRes = await fetch('/api/video/trim-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(reqBody),
+        });
+        if (!syncRes.ok) {
+          syncRes = await fetch('/api/trim-batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(reqBody),
+          });
+        }
+        if (syncRes.ok) {
+          const data = await syncRes.json();
+          setTrimProgress(data.total_clips || segments.length);
+          setTrimmedResults(data.clips || []);
+          setShowResultsPanel(true);
+          if (data.combined_url) setCombinedUrl(data.combined_url);
+          showToast(`Successfully trimmed ${data.total_clips} clip(s)!`, 'success');
+        } else {
+          const err = await syncRes.json();
+          showToast(`Batch trimming failed: ${err.detail || 'Error'}`, 'error');
+        }
+        return;
       }
+
+      const jobData = await jobRes.json();
+      const jobId = jobData.job_id;
+      if (!jobId) {
+        showToast('Could not initialize trim job on server', 'error');
+        return;
+      }
+
+      // Poll for progress
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`/api/video/trim-batch-progress/${jobId}`);
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            setTrimProgress(statusData.completed_clips || 0);
+            setTrimElapsedTime(Math.floor(statusData.elapsed_seconds || 0));
+
+            if (statusData.status === 'completed' && statusData.result) {
+              clearInterval(pollInterval);
+              if (trimTimerRef.current) clearInterval(trimTimerRef.current);
+              setTrimProgress(statusData.total_clips);
+              setTrimmedResults(statusData.result.clips || []);
+              setShowResultsPanel(true);
+              if (statusData.result.combined_url) setCombinedUrl(statusData.result.combined_url);
+              const elapsed = Math.floor((Date.now() - timerStart) / 1000);
+              showToast(`Trimmed ${statusData.total_clips} clip(s) in ${elapsed}s!`, 'success');
+              setIsTrimming(false);
+            } else if (statusData.status === 'failed') {
+              clearInterval(pollInterval);
+              if (trimTimerRef.current) clearInterval(trimTimerRef.current);
+              showToast(`Batch trimming failed: ${statusData.error || 'Encoding error'}`, 'error');
+              setIsTrimming(false);
+            }
+          }
+        } catch {
+          // Ignore brief network hiccups during poll
+        }
+      }, 1000);
+
+      // Safety timeout: 30 minutes
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        if (trimTimerRef.current) clearInterval(trimTimerRef.current);
+        setIsTrimming(false);
+      }, 1800000);
+
     } catch {
+      if (trimTimerRef.current) clearInterval(trimTimerRef.current);
       showToast('Backend offline — start the server first', 'error');
-    } finally {
       setIsTrimming(false);
     }
   };
@@ -791,10 +927,14 @@ export const VideoTrimmerView: React.FC = () => {
                 </div>
                 <div className="truncate">
                   <h4 className="text-xs font-bold text-text-primary truncate">
-                    {videoFile ? videoFile.name : (videoUrl ? 'Video File Imported' : 'Drag & Drop Video File')}
+                    {videoFile ? videoFile.name : (videoFileName || (videoUrl ? 'Video File Imported' : 'Drag & Drop Video File'))}
                   </h4>
                   <p className="text-[11px] text-text-muted">
-                    {videoFile ? `${(videoFile.size / (1024 * 1024)).toFixed(1)} MB` : 'Supports MP4, MKV, MOV, WEBM'}
+                    {videoFile
+                      ? `${(videoFile.size / (1024 * 1024)).toFixed(1)} MB`
+                      : videoDuration > 0
+                        ? `${videoDuration.toFixed(1)}s · ${videoFileName || 'video'}`
+                        : 'Supports MP4, MKV, MOV, WEBM'}
                   </p>
                 </div>
               </div>
@@ -810,6 +950,68 @@ export const VideoTrimmerView: React.FC = () => {
               </label>
             </div>
           </div>
+
+          {/* Upload Progress Bar — shows during upload with speed + retry + cancel */}
+          {isUploading && uploadProgress && (
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-text-secondary font-medium">
+                  {uploadProgress.attempt > 1
+                    ? `Retrying... (attempt ${uploadProgress.attempt}/3)`
+                    : 'Uploading to server'}
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-accent font-bold tabular-nums">
+                    {uploadProgress.percent}% · {uploadProgress.speed}
+                  </span>
+                  <button
+                    onClick={cancelUpload}
+                    className="p-0.5 rounded text-text-muted hover:text-danger hover:bg-danger/10 transition-colors"
+                    title="Cancel upload"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+              <div className="w-full h-2 bg-surface rounded-full overflow-hidden border border-border">
+                <div
+                  className="h-full bg-gradient-to-r from-accent to-accent-hover rounded-full transition-all duration-200 ease-out"
+                  style={{ width: `${uploadProgress.percent}%` }}
+                />
+              </div>
+              <p className="text-[10px] text-text-muted">
+                {(uploadProgress.loaded / (1024 * 1024)).toFixed(1)} MB / {(uploadProgress.total / (1024 * 1024)).toFixed(1)} MB
+              </p>
+            </div>
+          )}
+          {isUploading && !uploadProgress && (
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-[11px] text-text-secondary">
+                  <div className="w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                  Connecting to server...
+                </div>
+                <button
+                  onClick={cancelUpload}
+                  className="text-[11px] text-text-muted hover:text-danger transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          {/* Inline error state — shown after failed upload */}
+          {uploadError && !isUploading && (
+            <div className="flex items-center justify-between p-2 rounded-lg bg-danger/10 border border-danger/30">
+              <span className="text-[11px] text-danger font-medium">{uploadError}</span>
+              <button
+                onClick={() => { setUploadError(null); }}
+                className="p-0.5 rounded text-text-muted hover:text-danger transition-colors"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -903,7 +1105,7 @@ export const VideoTrimmerView: React.FC = () => {
                       onTimeUpdate={handleTimeUpdate}
                       onLoadedMetadata={handleLoadedMetadata}
                       onEnded={() => setIsPlaying(false)}
-                      className={`w-full h-full ${previewFrame === 'mobile' || previewFrame === 'square' ? 'object-cover' : 'object-contain'}`}
+                      className="w-full h-full object-cover"
                     />
                   </div>
 
@@ -1163,7 +1365,7 @@ export const VideoTrimmerView: React.FC = () => {
                 <button
                   onClick={handleStartTrimming}
                   disabled={isTrimming || isUploading}
-                  className="w-full sm:w-auto px-7 py-3 text-xs font-bold text-white rounded-card bg-accent hover:bg-accent-hover border-2 border-text-primary shadow-neo-md hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100"
+                  className="w-full sm:w-auto px-7 py-3 text-xs font-bold text-white rounded-card bg-accent hover:bg-accent-hover border-2 border-text-primary shadow-neo-md hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-80 disabled:cursor-not-allowed disabled:scale-100"
                 >
                   {isUploading ? (
                     <>
@@ -1171,7 +1373,11 @@ export const VideoTrimmerView: React.FC = () => {
                     </>
                   ) : isTrimming ? (
                     <>
-                      <RefreshCw className="w-4 h-4 animate-spin text-white" /> Rendering ({exportQuality.toUpperCase()})...
+                      <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                      {trimTotal > 0
+                        ? `${trimProgress}/${trimTotal} clips trimmed in ${trimElapsedTime}s`
+                        : `Rendering (${exportQuality.toUpperCase()})...`
+                      }
                     </>
                   ) : (
                     <>
@@ -1724,28 +1930,53 @@ export const VideoTrimmerView: React.FC = () => {
                       </span>
                     </div>
 
-                    <div
-                      className={`relative w-full bg-black rounded-lg overflow-hidden border border-border flex items-center justify-center transition-all duration-300 ${
-                        previewFrame === 'mobile'
-                          ? 'aspect-[9/16] max-h-[380px] mx-auto'
-                          : previewFrame === 'square'
-                          ? 'aspect-square max-h-[340px] mx-auto'
-                          : 'aspect-video'
-                      }`}
-                    >
-                      {videoUrl ? (
-                        <video
-                          src={videoUrl}
-                          className={`w-full h-full ${previewFrame === 'mobile' || previewFrame === 'square' ? 'object-cover' : 'object-contain'}`}
-                          controls
-                          muted
-                        />
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center text-text-muted text-xs p-4 text-center">
-                          <Upload className="w-6 h-6 mb-1 opacity-50" />
-                          Import a video above to see the Before preview
+                    <div className="w-full flex items-center justify-center">
+                      <div
+                        className={`transition-all duration-300 ${
+                          previewFrame === 'mobile'
+                            ? 'relative w-[200px] sm:w-[220px] aspect-[9/16] bg-black border-[6px] border-neutral-800 rounded-[30px] shadow-2xl overflow-hidden flex flex-col justify-between items-center ring-2 ring-white/10'
+                            : previewFrame === 'square'
+                            ? 'relative w-full max-w-[280px] aspect-square bg-black rounded-xl overflow-hidden border-2 border-border shadow-lg'
+                            : 'relative w-full aspect-video bg-black rounded-xl overflow-hidden border-2 border-border shadow-lg'
+                        }`}
+                      >
+                        {previewFrame === 'mobile' && (
+                          <>
+                            <span className="absolute -left-[8px] top-16 w-1 h-6 bg-neutral-700 rounded-l" />
+                            <span className="absolute -left-[8px] top-24 w-1 h-6 bg-neutral-700 rounded-l" />
+                            <span className="absolute -right-[8px] top-18 w-1 h-8 bg-neutral-700 rounded-r" />
+                            <div className="absolute top-1.5 z-30 w-20 h-3 bg-black rounded-full flex items-center justify-center gap-1.5 border border-white/10 shadow-sm">
+                              <span className="w-1 h-1 rounded-full bg-neutral-800" />
+                              <span className="w-1 h-1 rounded-full bg-blue-900" />
+                            </div>
+                          </>
+                        )}
+
+                        <div className="w-full h-full bg-black flex items-center justify-center overflow-hidden relative">
+                          {videoUrl ? (
+                            <video
+                              src={videoUrl}
+                              className="w-full h-full object-cover"
+                              controls
+                              muted
+                            />
+                          ) : (
+                            <div className="w-full h-full flex flex-col items-center justify-center text-text-muted text-xs p-4 text-center">
+                              <Upload className="w-6 h-6 mb-1 opacity-50" />
+                              Import a video above to see the Before preview
+                            </div>
+                          )}
                         </div>
-                      )}
+
+                        {previewFrame === 'mobile' && (
+                          <>
+                            <div className="absolute bottom-1 z-30 w-24 h-1 bg-white/40 rounded-full" />
+                            <div className="absolute bottom-3 z-30 px-2 py-0.5 bg-black/75 backdrop-blur-md rounded-full border border-white/20 text-[8px] font-mono text-white flex items-center gap-1 shadow-lg pointer-events-none">
+                              <Smartphone className="w-2 h-2 text-accent" /> 9:16
+                            </div>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1768,44 +1999,69 @@ export const VideoTrimmerView: React.FC = () => {
                       )}
                     </div>
 
-                    <div
-                      className={`relative w-full bg-black rounded-lg overflow-hidden border border-accent/40 flex items-center justify-center transition-all duration-300 ${
-                        previewFrame === 'mobile'
-                          ? 'aspect-[9/16] max-h-[380px] mx-auto'
-                          : previewFrame === 'square'
-                          ? 'aspect-square max-h-[340px] mx-auto'
-                          : 'aspect-video'
-                      }`}
-                    >
-                      {bypassAfterUrl ? (
-                        <video
-                          src={bypassAfterUrl}
-                          className={`w-full h-full ${previewFrame === 'mobile' || previewFrame === 'square' ? 'object-cover' : 'object-contain'}`}
-                          controls
-                          autoPlay
-                          muted
-                        />
-                      ) : videoUrl ? (
-                        <div className="w-full h-full overflow-hidden relative flex items-center justify-center">
-                          <video
-                            src={videoUrl}
-                            style={liveSimulate ? (getSimulatedFilterStyle() as React.CSSProperties) : undefined}
-                            className={`w-full h-full ${previewFrame === 'mobile' || previewFrame === 'square' ? 'object-cover' : 'object-contain'}`}
-                            controls
-                            muted
-                          />
-                          {liveSimulate && (
-                            <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-bold text-accent border border-accent/40 backdrop-blur-sm pointer-events-none">
-                              Live Visual Preview
+                    <div className="w-full flex items-center justify-center">
+                      <div
+                        className={`transition-all duration-300 ${
+                          previewFrame === 'mobile'
+                            ? 'relative w-[200px] sm:w-[220px] aspect-[9/16] bg-black border-[6px] border-neutral-800 rounded-[30px] shadow-2xl overflow-hidden flex flex-col justify-between items-center ring-2 ring-white/10'
+                            : previewFrame === 'square'
+                            ? 'relative w-full max-w-[280px] aspect-square bg-black rounded-xl overflow-hidden border-2 border-accent/40 shadow-lg'
+                            : 'relative w-full aspect-video bg-black rounded-xl overflow-hidden border-2 border-accent/40 shadow-lg'
+                        }`}
+                      >
+                        {previewFrame === 'mobile' && (
+                          <>
+                            <span className="absolute -left-[8px] top-16 w-1 h-6 bg-neutral-700 rounded-l" />
+                            <span className="absolute -left-[8px] top-24 w-1 h-6 bg-neutral-700 rounded-l" />
+                            <span className="absolute -right-[8px] top-18 w-1 h-8 bg-neutral-700 rounded-r" />
+                            <div className="absolute top-1.5 z-30 w-20 h-3 bg-black rounded-full flex items-center justify-center gap-1.5 border border-white/10 shadow-sm">
+                              <span className="w-1 h-1 rounded-full bg-neutral-800" />
+                              <span className="w-1 h-1 rounded-full bg-blue-900" />
+                            </div>
+                          </>
+                        )}
+
+                        <div className="w-full h-full bg-black flex items-center justify-center overflow-hidden relative">
+                          {bypassAfterUrl ? (
+                            <video
+                              src={bypassAfterUrl}
+                              className="w-full h-full object-cover"
+                              controls
+                              autoPlay
+                              muted
+                            />
+                          ) : videoUrl ? (
+                            <div className="w-full h-full overflow-hidden relative flex items-center justify-center">
+                              <video
+                                src={videoUrl}
+                                style={liveSimulate ? (getSimulatedFilterStyle() as React.CSSProperties) : undefined}
+                                className="w-full h-full object-cover"
+                                controls
+                                muted
+                              />
+                              {liveSimulate && (
+                                <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-bold text-accent border border-accent/40 backdrop-blur-sm pointer-events-none">
+                                  Live Visual Preview
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="w-full h-full flex flex-col items-center justify-center text-text-muted text-xs p-4 text-center">
+                              <ShieldAlert className="w-6 h-6 mb-1 text-accent opacity-50" />
+                              Import a video above to see the After preview
                             </div>
                           )}
                         </div>
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center text-text-muted text-xs p-4 text-center">
-                          <ShieldAlert className="w-6 h-6 mb-1 text-accent opacity-50" />
-                          Import a video above to see the After preview
-                        </div>
-                      )}
+
+                        {previewFrame === 'mobile' && (
+                          <>
+                            <div className="absolute bottom-1 z-30 w-24 h-1 bg-white/40 rounded-full" />
+                            <div className="absolute bottom-3 z-30 px-2 py-0.5 bg-black/75 backdrop-blur-md rounded-full border border-white/20 text-[8px] font-mono text-white flex items-center gap-1 shadow-lg pointer-events-none">
+                              <Smartphone className="w-2 h-2 text-accent" /> 9:16
+                            </div>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
 

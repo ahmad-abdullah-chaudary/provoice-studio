@@ -7,6 +7,8 @@ import tempfile
 import asyncio
 import mimetypes
 import subprocess
+import threading
+import uuid
 import numpy as np
 import psutil
 from concurrent.futures import ThreadPoolExecutor
@@ -73,6 +75,48 @@ def _resolve_audio_file(filename: str) -> str:
         if os.path.exists(candidate):
             return candidate
     raise HTTPException(status_code=404, detail="Audio file not found")
+
+
+# ─── Helper: Ultra-robust streaming file upload (avoids loading entire file into memory) ──
+
+MAX_UPLOAD_SIZE_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB max upload
+_CHUNK_SIZE = 1024 * 1024  # 1 MB chunks for streaming write
+
+
+async def _stream_upload_to_disk(file: UploadFile, out_path: str) -> int:
+    """Stream uploaded file to disk in chunks instead of loading entire file into memory.
+    Returns total bytes written. Raises HTTPException if file exceeds MAX_UPLOAD_SIZE_BYTES."""
+    total_bytes = 0
+    try:
+        with open(out_path, "wb") as f_out:
+            while True:
+                chunk = await file.read(_CHUNK_SIZE)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_SIZE_BYTES:
+                    # Clean up partial file
+                    f_out.close()
+                    try:
+                        os.unlink(out_path)
+                    except OSError:
+                        pass
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Maximum upload size is {MAX_UPLOAD_SIZE_BYTES // (1024*1024*1024)} GB."
+                    )
+                f_out.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Clean up partial file on any error
+        try:
+            if os.path.exists(out_path):
+                os.unlink(out_path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail=f"Upload write failed: {e}")
+    return total_bytes
 
 
 # ─── Helper: Run blocking TTS + DSP in a thread ────────────────────────────
@@ -212,9 +256,8 @@ async def upload_audio_file(file: UploadFile = File(...)):
     orig_filename = f"upload_{ts}_{_safe_filename(file.filename or 'file.wav')}"
     out_path = os.path.join(TEMP_DIR, orig_filename)
 
-    content = await file.read()
-    with open(out_path, "wb") as f_out:
-        f_out.write(content)
+    await _stream_upload_to_disk(file, out_path)
+    content_size = os.path.getsize(out_path)
 
     VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".flv", ".m4v", ".3gp"}
     is_video = original_ext in VIDEO_EXTS or (file.content_type or "").startswith("video/")
@@ -277,7 +320,7 @@ async def upload_audio_file(file: UploadFile = File(...)):
         "filename":   file.filename,
         "is_video":   is_video,
         "duration":   duration,
-        "file_size":  len(content),
+        "file_size":  content_size,
     }
 
 
@@ -446,12 +489,10 @@ async def mix_audio(
     if not os.path.exists(voice_path):
         raise HTTPException(status_code=404, detail="Voice audio file not found")
 
-    # Save uploaded music to temp
+    # Save uploaded music to temp via streaming write
     music_ext = os.path.splitext(_safe_filename(music_file.filename or "music.wav"))[1] or ".wav"
     music_path = os.path.join(TEMP_DIR, f"music_upload_{int(time.time()*1000)}{music_ext}")
-    contents = await music_file.read()
-    with open(music_path, "wb") as f:
-        f.write(contents)
+    await _stream_upload_to_disk(music_file, music_path)
 
     def _do_mix():
         voice_data, voice_sr = mixer.load_wav_as_float32(voice_path)
@@ -736,9 +777,7 @@ async def extract_video_audio(file: UploadFile = File(...)):
     in_path = os.path.join(TEMP_DIR, f"upload_video_{int(time.time()*1000)}{ext}")
     out_path = os.path.join(TEMP_DIR, f"extracted_audio_{int(time.time()*1000)}.wav")
 
-    contents = await file.read()
-    with open(in_path, "wb") as f:
-        f.write(contents)
+    await _stream_upload_to_disk(file, in_path)
 
     loop = asyncio.get_running_loop()
     success = await loop.run_in_executor(None, video_engine.extract_audio, in_path, out_path)
@@ -975,9 +1014,7 @@ async def upload_video_file(file: UploadFile = File(...)):
     out_filename = f"upload_video_{ts}_{safe_name}"
     out_path = os.path.join(TEMP_DIR, out_filename)
 
-    content = await file.read()
-    with open(out_path, "wb") as f_out:
-        f_out.write(content)
+    await _stream_upload_to_disk(file, out_path)
 
     video_url = f"/api/video/serve/{out_filename}"
     duration = 10.0
@@ -1051,6 +1088,114 @@ def video_trim_batch(payload: Dict[str, Any] = Body(...)):
         raise HTTPException(status_code=500, detail=res.get("error", "Trimming failed"))
 
     return res
+
+
+# ─── Async Trim Job System (progress tracking) ───────────────────────────────
+
+_trim_jobs: Dict[str, Dict[str, Any]] = {}
+_trim_jobs_lock = threading.Lock()
+
+
+@router.post("/video/trim-batch-async")
+@router.post("/trim-batch-async")
+def video_trim_batch_async(payload: Dict[str, Any] = Body(...)):
+    """Start async batch trim. Returns job_id immediately; poll /api/video/trim-batch-progress/{id}."""
+    video_path = payload.get("video_path", "")
+    ranges = payload.get("ranges", [])
+    merge_all = payload.get("merge_all", False)
+    export_quality = payload.get("export_quality", "original")
+    aspect_fit = payload.get("aspect_fit", "original")
+
+    if not video_path:
+        raise HTTPException(status_code=400, detail="video_path is required")
+    if not ranges or not isinstance(ranges, list):
+        raise HTTPException(status_code=400, detail="ranges must be a non-empty array")
+
+    if video_path.startswith("/api/video/serve/") or video_path.startswith("/api/audio/"):
+        filename = video_path.split("/")[-1]
+        video_path = os.path.join(TEMP_DIR, filename)
+
+    if not os.path.exists(video_path):
+        recent_videos = [
+            os.path.join(TEMP_DIR, f) for f in os.listdir(TEMP_DIR)
+            if f.startswith("upload_video_") or f.startswith("upload_")
+        ]
+        if recent_videos:
+            recent_videos.sort(key=os.path.getmtime, reverse=True)
+            video_path = recent_videos[0]
+
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Source video file not found. Please upload a video first.")
+
+    job_id = f"trim_{uuid.uuid4().hex[:12]}"
+    job = {
+        "id": job_id,
+        "status": "processing",
+        "total_clips": len(ranges),
+        "completed_clips": 0,
+        "created_at": time.time(),
+        "result": None,
+        "error": None,
+    }
+    with _trim_jobs_lock:
+        _trim_jobs[job_id] = job
+
+    def _worker():
+        def on_progress(done, total):
+            with _trim_jobs_lock:
+                if job_id in _trim_jobs:
+                    _trim_jobs[job_id]["completed_clips"] = done
+
+        try:
+            res = video_engine.trim_video_batch(
+                video_path=video_path,
+                ranges=ranges,
+                output_dir=TRIMMED_DIR,
+                merge_all=merge_all,
+                export_quality=export_quality,
+                aspect_fit=aspect_fit,
+                progress_callback=on_progress,
+            )
+            with _trim_jobs_lock:
+                if job_id in _trim_jobs:
+                    if res.get("success"):
+                        _trim_jobs[job_id]["status"] = "completed"
+                        _trim_jobs[job_id]["completed_clips"] = len(ranges)
+                        _trim_jobs[job_id]["result"] = res
+                    else:
+                        _trim_jobs[job_id]["status"] = "failed"
+                        _trim_jobs[job_id]["error"] = res.get("error", "Trimming failed")
+        except Exception as e:
+            with _trim_jobs_lock:
+                if job_id in _trim_jobs:
+                    _trim_jobs[job_id]["status"] = "failed"
+                    _trim_jobs[job_id]["error"] = str(e)
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+    return {"job_id": job_id, "status": "processing", "total_clips": len(ranges)}
+
+
+@router.get("/video/trim-batch-progress/{job_id}")
+@router.get("/trim-batch-progress/{job_id}")
+def get_trim_batch_progress(job_id: str):
+    """Poll trim job progress. Returns completed_clips/total_clips + elapsed time."""
+    with _trim_jobs_lock:
+        job = _trim_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    elapsed = round(time.time() - job["created_at"], 1)
+    return {
+        "id": job["id"],
+        "status": job["status"],
+        "total_clips": job["total_clips"],
+        "completed_clips": job["completed_clips"],
+        "elapsed_seconds": elapsed,
+        "result": job["result"],
+        "error": job["error"],
+    }
 
 
 @router.post("/video/detect-silence")
