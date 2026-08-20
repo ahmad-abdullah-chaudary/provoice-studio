@@ -1273,6 +1273,8 @@ def apply_copyright_bypass_async_route(payload: Dict[str, Any] = Body(...)):
     start_sec = float(payload.get("start_sec", 0.0))
     end_sec = float(payload.get("end_sec", 0.0))
     preview_duration = float(payload.get("preview_duration", 0.0))
+    export_quality = payload.get("export_quality", "original")
+    aspect_fit = payload.get("aspect_fit", "original")
     if payload.get("is_preview", False) and preview_duration <= 0:
         preview_duration = 15.0
 
@@ -1312,6 +1314,8 @@ def apply_copyright_bypass_async_route(payload: Dict[str, Any] = Body(...)):
         end_sec=clip_end,
         preview_duration=preview_duration,
         profile=profile or "custom",
+        export_quality=export_quality,
+        aspect_fit=aspect_fit,
     )
 
     return {
@@ -1349,6 +1353,8 @@ def apply_copyright_bypass_route(payload: Dict[str, Any] = Body(...)):
     start_sec = float(payload.get("start_sec", 0.0))
     end_sec = float(payload.get("end_sec", 0.0))
     preview_duration = float(payload.get("preview_duration", 0.0))
+    export_quality = payload.get("export_quality", "original")
+    aspect_fit = payload.get("aspect_fit", "original")
     if payload.get("is_preview", False) and preview_duration <= 0:
         preview_duration = 15.0
 
@@ -1389,6 +1395,8 @@ def apply_copyright_bypass_route(payload: Dict[str, Any] = Body(...)):
         start_sec=clip_start,
         end_sec=clip_end,
         preview_duration=preview_duration,
+        export_quality=export_quality,
+        aspect_fit=aspect_fit,
     )
 
     if not result.get("success"):

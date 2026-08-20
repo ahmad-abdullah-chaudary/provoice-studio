@@ -48,6 +48,7 @@ export const VideoTrimmerView: React.FC = () => {
   const [backendVideoPath, setBackendVideoPath] = useState<string | null>(() => {
     return localStorage.getItem('provoice_trimmer_backend_path') || null;
   });
+  const [originalVideoPath, setOriginalVideoPath] = useState<string | null>(null);
   const [videoDuration, setVideoDuration] = useState<number>(() => {
     const saved = localStorage.getItem('provoice_trimmer_video_duration');
     return saved ? parseFloat(saved) : 0;
@@ -116,7 +117,7 @@ export const VideoTrimmerView: React.FC = () => {
   const [showBypassPanel, setShowBypassPanel] = useState<boolean>(true);
   const [bypassProfile, setBypassProfile] = useState<string>('light');
   const [isBypassing, setIsBypassing] = useState<boolean>(false);
-  const [bypassResult, setBypassResult] = useState<{ filename: string; download_url: string } | null>(null);
+  const [bypassResult, setBypassResult] = useState<{ filename: string; download_url: string; output_path?: string } | null>(null);
   const [bypassAfterUrl, setBypassAfterUrl] = useState<string | null>(null);
   const [liveSimulate, setLiveSimulate] = useState<boolean>(true);
   const [bypassStatusText, setBypassStatusText] = useState<string>('');
@@ -440,6 +441,7 @@ export const VideoTrimmerView: React.FC = () => {
         const dur = (data.duration as number) || 0;
 
         setBackendVideoPath(serverPath);
+        setOriginalVideoPath(null);
         setVideoDuration(dur);
         setVideoFileName(file.name);
 
@@ -1679,6 +1681,8 @@ export const VideoTrimmerView: React.FC = () => {
                       settings: bypassSettings,
                       is_preview: true,
                       preview_duration: 15.0,
+                      export_quality: exportQuality,
+                      aspect_fit: aspectFit,
                     };
 
                     try {
@@ -1783,6 +1787,8 @@ export const VideoTrimmerView: React.FC = () => {
                       profile: bypassProfile,
                       settings: bypassSettings,
                       is_preview: false,
+                      export_quality: exportQuality,
+                      aspect_fit: aspectFit,
                     };
 
                     try {
@@ -1827,7 +1833,20 @@ export const VideoTrimmerView: React.FC = () => {
                               clearInterval(pollInterval);
                               setBypassResult(statusData.result);
                               setBypassAfterUrl(statusData.result.download_url);
-                              showToast(`Full bypass complete! (Profile: ${statusData.profile || bypassProfile})`, 'success');
+
+                              // Save original path so user can switch back
+                              if (!originalVideoPath && backendVideoPath) {
+                                setOriginalVideoPath(backendVideoPath);
+                              }
+
+                              // Switch backendVideoPath to bypass output so subsequent trim uses it
+                              const bypassOutputPath = statusData.result.output_path || statusData.result.download_url;
+                              if (bypassOutputPath) {
+                                setBackendVideoPath(bypassOutputPath);
+                                localStorage.setItem('provoice_trimmer_backend_path', bypassOutputPath);
+                              }
+
+                              showToast(`Full bypass complete! Trimming will now use the bypassed video. (Profile: ${statusData.profile || bypassProfile})`, 'success');
                               setIsBypassing(false);
                             } else if (statusData.status === 'failed') {
                               clearInterval(pollInterval);
@@ -2099,6 +2118,48 @@ export const VideoTrimmerView: React.FC = () => {
                           title="Copy download link"
                         >
                           Copy Link
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Use Original / Use Bypass toggle */}
+                  {originalVideoPath && bypassResult && (
+                    <div className="mt-2 p-2 bg-surface-secondary/50 rounded-lg border border-border flex items-center justify-between gap-3">
+                      <span className="text-[10px] text-text-secondary font-semibold uppercase tracking-wider">
+                        Active Video
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => {
+                            setBackendVideoPath(originalVideoPath);
+                            localStorage.setItem('provoice_trimmer_backend_path', originalVideoPath);
+                            showToast('Switched to original video — trim will use the unmodified source', 'info');
+                          }}
+                          className={`text-[10px] px-2.5 py-1 rounded-full font-bold border transition-all ${
+                            backendVideoPath === originalVideoPath
+                              ? 'bg-text-primary text-surface border-text-primary'
+                              : 'bg-transparent text-text-secondary border-border hover:border-text-secondary'
+                          }`}
+                        >
+                          Original
+                        </button>
+                        <button
+                          onClick={() => {
+                            const bypassPath = bypassResult.output_path || bypassResult.download_url;
+                            if (bypassPath) {
+                              setBackendVideoPath(bypassPath);
+                              localStorage.setItem('provoice_trimmer_backend_path', bypassPath);
+                              showToast('Switched to bypass video — trim will use the rendered output', 'info');
+                            }
+                          }}
+                          className={`text-[10px] px-2.5 py-1 rounded-full font-bold border transition-all ${
+                            backendVideoPath !== originalVideoPath
+                              ? 'bg-accent text-surface border-accent'
+                              : 'bg-transparent text-text-secondary border-border hover:border-accent'
+                          }`}
+                        >
+                          Bypass
                         </button>
                       </div>
                     </div>

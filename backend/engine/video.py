@@ -753,9 +753,12 @@ class VideoSyncEngine:
         start_sec: float = 0.0,
         end_sec: float = 0.0,
         preview_duration: float = 0.0,
+        export_quality: str = "original",
+        aspect_fit: str = "original",
     ) -> Dict[str, Any]:
         """
         Apply copyright bypass transformations to a video (or clip segment / preview sample).
+        Optionally applies aspect ratio conversion (9:16, 1:1) and quality upscale in the same pass.
         Returns dict with output_path, download_url, success.
         """
         if not os.path.exists(video_path):
@@ -797,6 +800,29 @@ class VideoSyncEngine:
         if not has_audio:
             af = None
 
+        # ── Compute target resolution for aspect ratio conversion ──
+        target_w, target_h = 0, 0
+        if export_quality == "2k":
+            if aspect_fit == "mobile_9_16": target_w, target_h = 1440, 2560
+            elif aspect_fit == "square_1_1": target_w, target_h = 1440, 1440
+            elif aspect_fit != "original": target_w, target_h = 2560, 1440
+        elif export_quality == "4k":
+            if aspect_fit == "mobile_9_16": target_w, target_h = 2160, 3840
+            elif aspect_fit == "square_1_1": target_w, target_h = 2160, 2160
+            elif aspect_fit != "original": target_w, target_h = 3840, 2160
+        elif export_quality == "1080p":
+            if aspect_fit == "mobile_9_16": target_w, target_h = 1080, 1920
+            elif aspect_fit == "square_1_1": target_w, target_h = 1080, 1080
+            elif aspect_fit != "original": target_w, target_h = 1920, 1080
+        elif aspect_fit == "mobile_9_16":
+            target_w, target_h = 1080, 1920
+        elif aspect_fit == "square_1_1":
+            target_w, target_h = 1080, 1080
+
+        # ── Aspect ratio conversion filter — applied as SEPARATE pass ──
+        # Cannot be mixed with bypass filters (zoom/letterbox change dimensions mid-chain)
+        need_aspect_pass = target_w > 0 and target_h > 0
+
         cmd = ["ffmpeg", "-y"]
 
         # Seek / clip range
@@ -829,14 +855,51 @@ class VideoSyncEngine:
         else:
             cmd += ["-an"]
 
-        cmd += ["-movflags", "+faststart", out_path]
+        # If aspect conversion needed, write to temp file first
+        bypass_out = out_path
+        if need_aspect_pass:
+            tmp_name = f"_bypass_tmp_{ts}.mp4"
+            bypass_out = os.path.join(output_dir, tmp_name)
+            cmd += ["-movflags", "+faststart", bypass_out]
+        else:
+            cmd += ["-movflags", "+faststart", out_path]
 
         # Timeout: 120s for preview/clips, 3600s (1 hour) for full movie
         timeout_sec = 120 if preview_duration > 0 else 3600
 
         try:
             result = subprocess.run(cmd, capture_output=True, timeout=timeout_sec)
-            if result.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 100:
+            if result.returncode != 0 or not os.path.exists(bypass_out) or os.path.getsize(bypass_out) <= 100:
+                stderr = result.stderr.decode("utf-8", errors="replace")[-800:]
+                print(f"[VideoEngine] Bypass FFmpeg error:\n{stderr}")
+                return {"success": False, "error": f"FFmpeg failed: {stderr}"}
+
+            # ── Second pass: aspect ratio conversion ──
+            if need_aspect_pass:
+                af2 = (
+                    f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase:flags=lanczos,"
+                    f"crop={target_w}:{target_h}:(in_w-{target_w})/2:(in_h-{target_h})/2,"
+                    f"setsar=1"
+                )
+                cmd2 = [
+                    "ffmpeg", "-y", "-i", bypass_out,
+                    "-vf", af2,
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+                    "-threads", "0", "-c:a", "aac", "-ac", "2", "-b:a", "192k",
+                    "-movflags", "+faststart", out_path,
+                ]
+                result2 = subprocess.run(cmd2, capture_output=True, timeout=timeout_sec)
+                # Clean up temp file
+                try:
+                    os.remove(bypass_out)
+                except OSError:
+                    pass
+                if result2.returncode != 0 or not os.path.exists(out_path) or os.path.getsize(out_path) <= 100:
+                    stderr2 = result2.stderr.decode("utf-8", errors="replace")[-800:]
+                    print(f"[VideoEngine] Aspect conversion FFmpeg error:\n{stderr2}")
+                    return {"success": False, "error": f"Aspect conversion failed: {stderr2}"}
+
+            if os.path.exists(out_path) and os.path.getsize(out_path) > 100:
                 return {
                     "success": True,
                     "output_path": out_path,
@@ -844,9 +907,7 @@ class VideoSyncEngine:
                     "download_url": f"/api/exports/trimmed/{out_name}",
                 }
             else:
-                stderr = result.stderr.decode("utf-8", errors="replace")[-800:]
-                print(f"[VideoEngine] Bypass FFmpeg error:\n{stderr}")
-                return {"success": False, "error": f"FFmpeg failed: {stderr}"}
+                return {"success": False, "error": "Output file is empty or missing"}
         except subprocess.TimeoutExpired:
             return {"success": False, "error": f"Processing timeout ({timeout_sec}s)"}
         except Exception as e:
@@ -910,6 +971,8 @@ class VideoJobManager:
         end_sec: float = 0.0,
         preview_duration: float = 0.0,
         profile: str = "custom",
+        export_quality: str = "original",
+        aspect_fit: str = "original",
     ) -> str:
         import threading
         import uuid
@@ -938,6 +1001,8 @@ class VideoJobManager:
                     start_sec=start_sec,
                     end_sec=end_sec,
                     preview_duration=preview_duration,
+                    export_quality=export_quality,
+                    aspect_fit=aspect_fit,
                 )
                 with self._lock:
                     if res.get("success"):

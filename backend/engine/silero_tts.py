@@ -368,10 +368,25 @@ class SileroTTSService:
 
     def _master_vocal_track(self, audio: np.ndarray, sample_rate: int, gender: str = "Male") -> np.ndarray:
         """
-        Pristine Studio Clean Mastering.
-        - 50Hz Sub-Rumble Cut (Butterworth 2-pole linear phase): removes DC offset & sub-noise
-        - Transparent Peak Normalization to -1.0 dBFS (0.891): 100% distortion-free, pure neural fidelity
-        - Zero waveshaper clipping, zero artificial buzz, zero phase smearing
+        Punchy Studio Narrator Mastering for Silero Indic voices.
+        Target: Match or exceed the richness, punch, and loudness of Kokoro ONNX voices.
+
+        Two key principles:
+        - NO final normalization here — the DSP pipeline handles that.
+          This chain focuses on TONE and DYNAMICS only.
+        - Pre-normalize input to compressor so it always reacts identically,
+          regardless of Silero output level variations → consistent tone.
+
+        Signal flow:
+        1. DC/sub-rumble cut (80Hz highpass)
+        2. Pre-normalize input to -6 dBFS (compressor reference level)
+        3. Voice body boost (400-800Hz) — the "meat" of the voice
+        4. Bass warmth (120-250Hz) — controlled, gender-aware
+        5. Presence/clarity (3kHz) — intelligibility & cut-through
+        6. De-esser — tame sibilance
+        7. Compressor with makeup gain — punch & consistency
+        8. Harmonic exciter — tube warmth
+        9. Peak restore to -3 dBFS (headroom for DSP pipeline)
         """
         if audio.size == 0:
             return audio
@@ -379,17 +394,147 @@ class SileroTTSService:
         try:
             import scipy.signal
 
-            # 1. Gentle DC / sub-rumble cleanup below human voice range (50Hz)
             nyq = sample_rate / 2.0
-            b, a = scipy.signal.butter(2, 50.0 / nyq, btype='highpass')
-            clean = scipy.signal.filtfilt(b, a, audio).astype(np.float32)
+            clean = audio.astype(np.float32)
 
-            # 2. Transparent Peak Normalization to -1.0 dBFS (0.891) — Pure natural voice
+            # ── 1. Sub-rumble / DC cut (80Hz highpass) ──
+            b, a = scipy.signal.butter(2, 80.0 / nyq, btype='highpass')
+            clean = scipy.signal.filtfilt(b, a, clean).astype(np.float32)
+
+            # ── 2. Pre-normalize input to -6 dBFS (0.501 linear) ──
+            # This ensures the compressor and EQ always see the same level,
+            # regardless of how quiet/loud the raw Silero output is.
+            # → Consistent tone every time.
+            input_peak = float(np.abs(clean).max())
+            if input_peak > 0.0001:
+                clean = (clean / input_peak) * 0.501
+
+            # ── 3. Voice body boost (400-800Hz) — the "meat" & power ──
+            if gender == "Male":
+                body_center = 500.0
+                body_gain_db = 4.5
+            else:
+                body_center = 650.0
+                body_gain_db = 3.5
+
+            body_q = 0.8
+            w0_b = 2.0 * np.pi * body_center / sample_rate
+            alpha_b = np.sin(w0_b) / (2.0 * body_q)
+            Ab = 10 ** (body_gain_db / 40.0)
+            bb0 = Ab * (1.0 + alpha_b)
+            bb1 = -2.0 * Ab * np.cos(w0_b)
+            bb2 = Ab * (1.0 - alpha_b)
+            ba0 = 1.0 + alpha_b / Ab
+            ba1 = -2.0 * np.cos(w0_b)
+            ba2 = 1.0 - alpha_b / Ab
+            clean = scipy.signal.lfilter([bb0, bb1, bb2], [ba0, ba1, ba2], clean).astype(np.float32)
+
+            # ── 4. Bass warmth (controlled peaking, NOT boomy shelf) ──
+            if gender == "Male":
+                bass_freq = 130.0
+                bass_gain_db = 2.5
+            else:
+                bass_freq = 180.0
+                bass_gain_db = 2.0
+
+            bass_q = 1.2
+            w0_bass = 2.0 * np.pi * bass_freq / sample_rate
+            alpha_bass = np.sin(w0_bass) / (2.0 * bass_q)
+            Abass = 10 ** (bass_gain_db / 40.0)
+            bbb0 = Abass * (1.0 + alpha_bass)
+            bbb1 = -2.0 * Abass * np.cos(w0_bass)
+            bbb2 = Abass * (1.0 - alpha_bass)
+            bba0 = 1.0 + alpha_bass / Abass
+            bba1 = -2.0 * np.cos(w0_bass)
+            bba2 = 1.0 - alpha_bass / Abass
+            clean = scipy.signal.lfilter([bbb0, bbb1, bbb2], [bba0, bba1, bba2], clean).astype(np.float32)
+
+            # ── 5. Presence / clarity boost (3kHz) ──
+            pres_center = 3000.0
+            pres_q = 1.0
+            pres_gain_db = 3.0
+            w0_p = 2.0 * np.pi * pres_center / sample_rate
+            alpha_p = np.sin(w0_p) / (2.0 * pres_q)
+            Ap = 10 ** (pres_gain_db / 40.0)
+            bp0 = Ap * (1.0 + alpha_p)
+            bp1 = -2.0 * Ap * np.cos(w0_p)
+            bp2 = Ap * (1.0 - alpha_p)
+            ba0 = 1.0 + alpha_p / Ap
+            ba1 = -2.0 * np.cos(w0_p)
+            ba2 = 1.0 - alpha_p / Ap
+            clean = scipy.signal.lfilter([bp0, bp1, bp2], [ba0, ba1, ba2], clean).astype(np.float32)
+
+            # ── 6. De-esser ──
+            deess_freq = 6000.0
+            deess_threshold = 0.30
+            deess_ratio = 0.5
+            b_deess, a_deess = scipy.signal.butter(2, min(deess_freq / nyq, 0.99), btype='highpass')
+            sibilant = scipy.signal.lfilter(b_deess, a_deess, clean)
+            sib_env = np.abs(sibilant)
+            atk_c = np.exp(-1.0 / (sample_rate * 0.001))
+            rel_c = np.exp(-1.0 / (sample_rate * 0.015))
+            sib_smooth = np.zeros_like(sib_env)
+            for i in range(1, len(sib_env)):
+                if sib_env[i] > sib_smooth[i - 1]:
+                    sib_smooth[i] = atk_c * sib_smooth[i - 1] + (1.0 - atk_c) * sib_env[i]
+                else:
+                    sib_smooth[i] = rel_c * sib_smooth[i - 1] + (1.0 - rel_c) * sib_env[i]
+            sib_gain = np.ones_like(clean)
+            mask = sib_smooth > deess_threshold
+            excess = sib_smooth[mask] - deess_threshold
+            sib_gain[mask] = 1.0 - excess * (1.0 - deess_ratio) / np.maximum(sib_smooth[mask], 1e-6)
+            sib_gain = np.clip(sib_gain, 0.25, 1.0)
+            clean_hp = scipy.signal.lfilter(b_deess, a_deess, clean)
+            clean_lp = clean - clean_hp
+            clean = clean_lp + clean_hp * sib_gain
+
+            # ── 7. Compressor with makeup gain — PUNCH (slow attack/release for consistency) ──
+            comp_threshold_db = -18.0
+            comp_ratio = 4.0
+            makeup_gain_db = 8.0
+            # Slower attack (8ms) and release (120ms) = more consistent, less level-dependent tone
+            comp_attack_ms = 8.0
+            comp_release_ms = 120.0
+            attack_coeff = np.exp(-1.0 / (sample_rate * comp_attack_ms / 1000.0))
+            release_coeff = np.exp(-1.0 / (sample_rate * comp_release_ms / 1000.0))
+            envelope = np.zeros(len(clean), dtype=np.float64)
+            gain_reduction = np.zeros(len(clean), dtype=np.float64)
+            threshold_lin = 10 ** (comp_threshold_db / 20.0)
+            makeup_lin = 10 ** (makeup_gain_db / 20.0)
+            env = 0.0
+            for i in range(len(clean)):
+                abs_val = abs(clean[i])
+                if abs_val > env:
+                    env = attack_coeff * env + (1.0 - attack_coeff) * abs_val
+                else:
+                    env = release_coeff * env + (1.0 - release_coeff) * abs_val
+                envelope[i] = env
+                if env > threshold_lin:
+                    env_db = 20.0 * np.log10(max(env, 1e-10))
+                    gain_db = (env_db - comp_threshold_db) * (1.0 - 1.0 / comp_ratio)
+                    gain_reduction[i] = -gain_db
+                else:
+                    gain_reduction[i] = 0.0
+            gain_linear = 10 ** (-gain_reduction / 20.0)
+            clean = clean * gain_linear * makeup_lin
+
+            # ── 8. Harmonic exciter — tube warmth (gentle, level-independent) ──
+            excite_amount = 0.10
+            b_exc, a_exc = scipy.signal.butter(2, min(2500.0 / nyq, 0.99), btype='highpass')
+            high_band = scipy.signal.lfilter(b_exc, a_exc, clean.astype(np.float64))
+            drive = 1.0 + excite_amount * 3.0
+            saturated = np.tanh(high_band * drive) / drive
+            harmonic_layer = (saturated - high_band) * excite_amount
+            clean = clean + harmonic_layer.astype(np.float32)
+
+            # ── 9. Peak restore to -3 dBFS — safe headroom for DSP pipeline ──
+            # DSP pipeline will do its own normalize/limiter on top.
             max_peak = float(np.abs(clean).max())
             if max_peak > 0.0001:
-                clean = (clean / max_peak) * 0.891
+                target = 10 ** (-3.0 / 20.0)  # -3 dBFS = 0.708 linear
+                clean = (clean / max_peak) * target
 
-            return clean
+            return clean.astype(np.float32)
 
         except Exception as e:
             print(f"[SileroTTS] Mastering warning: {e}")
@@ -428,70 +573,38 @@ class SileroTTSService:
         gender = meta.get("gender", "Male")
         sample_rate = 24000
 
-        # Split text into natural sentence / clause chunks for expressive delivery
-        raw_sentences = re.split(r'(?<=[.!?।…\n])\s+', text.strip())
-        sentences = [s.strip() for s in raw_sentences if s.strip()]
+        # Transliterate full text to ISO for Silero model
+        iso_text = self._prepare_text_for_indic(text.strip(), script=script)
 
-        if not sentences:
+        if not iso_text or not iso_text.strip():
             return np.zeros(0, dtype=np.float32), sample_rate
 
-        audio_pieces: List[np.ndarray] = []
+        try:
+            # Generate entire text in ONE call — model maintains consistent prosody/pitch
+            # across the whole text. Splitting into sentences caused pitch jumps because
+            # each sentence was a separate model inference with its own pitch contour.
+            tensor_audio = model.apply_tts(
+                text=iso_text,
+                speaker=speaker,
+                sample_rate=48000,
+            )
+            audio_48k = tensor_audio.detach().cpu().numpy().astype(np.float32)
 
-        # Emotion pause table (natural milliseconds)
-        emotion_gaps = {
-            "dramatic": 350,
-            "sad": 400,
-            "energetic": 180,
-            "whispering": 250,
-            "news": 200,
-            "sher": 450,
-            "normal": sentence_gap_ms,
-        }
+            # Resample 48kHz -> 24kHz using polyphase anti-aliasing
+            full_audio = scipy.signal.resample_poly(audio_48k, 1, 2).astype(np.float32)
 
-        for idx, sentence in enumerate(sentences):
-            if not sentence:
-                continue
+            # Global user speed override (only if explicitly set by user away from 1.0)
+            if abs(speed - 1.0) > 0.05 and len(full_audio) > 0:
+                target_len = max(1, int(len(full_audio) / max(0.5, min(speed, 2.0))))
+                indices = np.linspace(0, len(full_audio) - 1, target_len)
+                full_audio = np.interp(indices, np.arange(len(full_audio)), full_audio).astype(np.float32)
 
-            sent_emotion = emotion or detect_emotion(sentence)
-            gap_ms = emotion_gaps.get(sent_emotion, sentence_gap_ms)
-
-            # Transliterate to ISO for Silero model
-            iso_text = self._prepare_text_for_indic(sentence, script=script)
-
-            try:
-                # Generate at native 48kHz (highest quality neural output)
-                tensor_audio = model.apply_tts(
-                    text=iso_text,
-                    speaker=speaker,
-                    sample_rate=48000,
-                )
-                audio_48k = tensor_audio.detach().cpu().numpy().astype(np.float32)
-
-                # Resample 48kHz -> 24kHz using polyphase anti-aliasing
-                piece_24k = scipy.signal.resample_poly(audio_48k, 1, 2).astype(np.float32)
-
-                # Global user speed override (only if explicitly set by user away from 1.0)
-                if abs(speed - 1.0) > 0.05 and len(piece_24k) > 0:
-                    target_len = max(1, int(len(piece_24k) / max(0.5, min(speed, 2.0))))
-                    indices = np.linspace(0, len(piece_24k) - 1, target_len)
-                    piece_24k = np.interp(indices, np.arange(len(piece_24k)), piece_24k).astype(np.float32)
-
-                audio_pieces.append(piece_24k)
-
-                # Natural narrative pause between sentences
-                if idx < len(sentences) - 1:
-                    is_para = "\n" in sentence
-                    gap = paragraph_gap_ms if is_para else gap_ms
-                    if gap > 0:
-                        audio_pieces.append(np.zeros(int(sample_rate * gap / 1000.0), dtype=np.float32))
-
-            except Exception as e:
-                print(f"[SileroTTS] Sentence synthesis warning on '{sentence[:30]}...': {e}")
-
-        if not audio_pieces:
+        except Exception as e:
+            print(f"[SileroTTS] Synthesis error for '{voice_id}': {e}")
             return np.zeros(0, dtype=np.float32), sample_rate
 
-        full_audio = np.concatenate(audio_pieces)
+        if full_audio.size == 0:
+            return np.zeros(0, dtype=np.float32), sample_rate
 
         # Apply rich warm studio narrator mastering
         full_audio = self._master_vocal_track(full_audio, sample_rate, gender)
