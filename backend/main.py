@@ -156,6 +156,28 @@ def health():
     return {"status": "ok", "service": "provoice-studio"}
 
 
+@app.get("/v1/models")
+def v1_models():
+    """REST API v1 — OpenAI-compatible models listing (root-level path)."""
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "provoice-tts",
+                "object": "model",
+                "owned_by": "provoice",
+                "capabilities": ["tts", "audio"],
+            },
+            {
+                "id": "provoice-video",
+                "object": "model",
+                "owned_by": "provoice",
+                "capabilities": ["video", "trim", "bypass"],
+            },
+        ],
+    }
+
+
 app.include_router(api_router, prefix="/api")
 
 if __name__ == "__main__":
