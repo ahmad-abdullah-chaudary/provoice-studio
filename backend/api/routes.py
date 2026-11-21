@@ -976,6 +976,28 @@ def api_v1_get_voices():
     return {"voices": tts_engine.get_available_voices(), "api_version": "v1"}
 
 
+@router.get("/v1/models")
+def api_v1_get_models():
+    """REST API v1 — list available models (OpenAI-compatible models endpoint)."""
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "provoice-tts",
+                "object": "model",
+                "owned_by": "provoice",
+                "capabilities": ["tts", "audio"],
+            },
+            {
+                "id": "provoice-video",
+                "object": "model",
+                "owned_by": "provoice",
+                "capabilities": ["video", "trim", "bypass"],
+            },
+        ],
+    }
+
+
 # ─── Webhooks ─────────────────────────────────────────────────────────────────
 
 @router.get("/webhooks")

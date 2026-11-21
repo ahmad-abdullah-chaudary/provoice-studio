@@ -149,6 +149,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.get("/health")
+def health():
+    """Health check endpoint — returns 200 when the backend engine is running."""
+    return {"status": "ok", "service": "provoice-studio"}
+
+
 app.include_router(api_router, prefix="/api")
 
 if __name__ == "__main__":

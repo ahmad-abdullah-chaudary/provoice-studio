@@ -246,6 +246,35 @@ class VideoSyncEngine:
         return 0, 0
 
     @staticmethod
+    def _probe_codecs(video_path: str) -> Tuple[Optional[str], Optional[str], bool]:
+        """
+        Probe source video/audio codecs via ffprobe.
+        Returns (video_codec, audio_codec, has_audio).
+        """
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error",
+                 "-select_streams", "v:0,a:0",
+                 "-show_entries", "stream=codec_type,codec_name",
+                 "-of", "csv=p=0", video_path],
+                capture_output=True, text=True,
+            )
+            v_codec: Optional[str] = None
+            a_codec: Optional[str] = None
+            has_audio = False
+            for line in probe.stdout.strip().splitlines():
+                parts = line.strip().split(",")
+                if len(parts) >= 2:
+                    if parts[0] == "video":
+                        v_codec = parts[1]
+                    elif parts[0] == "audio":
+                        a_codec = parts[1]
+                        has_audio = True
+            return v_codec, a_codec, has_audio
+        except Exception:
+            return None, None, False
+
+    @staticmethod
     def trim_video_batch(
         video_path: str,
         ranges: List[Dict[str, Any]],
@@ -272,6 +301,19 @@ class VideoSyncEngine:
         if src_w > 0 and src_h > 0:
             print(f"[VideoEngine] Source resolution: {src_w}x{src_h}")
 
+        # ── Probe source codecs (only stream-copy if web-compatible) ────────
+        src_vcodec, src_acodec, src_has_audio = VideoSyncEngine._probe_codecs(video_path)
+        # Unknown/failed probe (None) is treated as NOT web-compatible → forces re-encode to safe H.264+AAC
+        codecs_web_compatible = (
+            src_vcodec is not None and
+            src_vcodec in ("h264", "avc1") and
+            (src_acodec in (None, "aac") or not src_has_audio)
+        )
+        if src_vcodec:
+            print(f"[VideoEngine] Source codecs: v={src_vcodec} a={src_acodec} (web-compatible={codecs_web_compatible})")
+        else:
+            print(f"[VideoEngine] Source codecs: probe failed — forcing re-encode to H.264+AAC (web-compatible=False)")
+
         # ── Determine target resolution & video filter ─────────────────────
         vf_filter = None
         audio_bitrate = "320k"
@@ -279,12 +321,13 @@ class VideoSyncEngine:
         target_w, target_h = 0, 0
 
         def make_scale_pad(w: int, h: int) -> str:
-            """Scale video to FILL the target frame then center-crop to exact WxH.
-            Used for 9:16 Shorts/Reels/TikTok conversion — video fills the entire
-            vertical frame with no black bars (center-crops the sides)."""
+            """Scale video to FIT within the target frame then letterbox with black bars.
+            Preserves the full video content — nothing is cropped or cut off.
+            Used for 9:16 Shorts/Reels/TikTok conversion — video fits entirely inside
+            the frame with black bars filling unused space."""
             return (
-                f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,"
-                f"crop={w}:{h}:(in_w-{w})/2:(in_h-{h})/2,"
+                f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,"
+                f"pad={w}:{h}:(trunc((ow-iw)/2)):trunc((oh-ih)/2):black,"
                 f"setsar=1"
             )
 
@@ -325,11 +368,11 @@ class VideoSyncEngine:
         if src_w > 0 and src_h > 0 and target_w > 0 and target_h > 0:
             src_ratio = src_w / src_h
             tgt_ratio = target_w / target_h
-            if abs(src_ratio - tgt_ratio) < 0.02 and src_w == target_w and src_h == target_h:
+            if abs(src_ratio - tgt_ratio) < 0.02 and src_w == target_w and src_h == target_h and codecs_web_compatible:
                 can_stream_copy = True
                 vf_filter = None  # No filter needed — stream copy is sufficient
                 print(f"[VideoEngine] Source matches target ({src_w}x{src_h}) — using fast stream copy")
-        elif export_quality == "original" and aspect_fit == "original":
+        elif export_quality == "original" and aspect_fit == "original" and codecs_web_compatible:
             can_stream_copy = True
 
         # ── Define single-clip worker (runs in thread pool) ────────────────
@@ -351,6 +394,8 @@ class VideoSyncEngine:
                     "-i", video_path,
                     "-c", "copy",
                     "-avoid_negative_ts", "make_zero",
+                    "-movflags", "+faststart",
+                    "-vf", "setsar=1",
                     clip_path,
                 ]
                 try:
@@ -372,6 +417,7 @@ class VideoSyncEngine:
                     cmd_encode += ["-vf", vf_filter]
                 cmd_encode += [
                     "-c:v", "libx264", "-preset", "medium", "-crf", "22",
+                    "-pix_fmt", "yuv420p",
                     "-b:v", video_bitrate,
                     "-maxrate", str(int(video_bitrate.replace("M", "")) * 2) + "M",
                     "-bufsize", str(int(video_bitrate.replace("M", "")) * 4) + "M",
@@ -414,6 +460,7 @@ class VideoSyncEngine:
                                 "-i", video_path,
                                 "-vf", fallback_filter,
                                 "-c:v", "libx264", "-preset", "medium", "-crf", "22",
+                                "-pix_fmt", "yuv420p",
                                 "-b:v", video_bitrate,
                                 "-maxrate", str(int(video_bitrate.replace("M", "")) * 2) + "M",
                                 "-bufsize", str(int(video_bitrate.replace("M", "")) * 4) + "M",
@@ -846,6 +893,7 @@ class VideoSyncEngine:
             "-tune", "fastdecode",
             "-threads", "0",
             "-crf", "22",
+            "-pix_fmt", "yuv420p",
         ]
 
         if has_audio:
@@ -873,14 +921,15 @@ class VideoSyncEngine:
             # ── Second pass: aspect ratio conversion ──
             if need_aspect_pass:
                 af2 = (
-                    f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase:flags=lanczos,"
-                    f"crop={target_w}:{target_h}:(in_w-{target_w})/2:(in_h-{target_h})/2,"
+                    f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease:flags=lanczos,"
+                    f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black,"
                     f"setsar=1"
                 )
                 cmd2 = [
                     "ffmpeg", "-y", "-i", bypass_out,
                     "-vf", af2,
                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+                    "-pix_fmt", "yuv420p",
                     "-threads", "0", "-c:a", "aac", "-ac", "2", "-b:a", "192k",
                     "-movflags", "+faststart", out_path,
                 ]

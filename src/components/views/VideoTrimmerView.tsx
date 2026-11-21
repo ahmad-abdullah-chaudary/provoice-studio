@@ -1100,7 +1100,7 @@ export const VideoTrimmerView: React.FC = () => {
                       onTimeUpdate={handleTimeUpdate}
                       onLoadedMetadata={handleLoadedMetadata}
                       onEnded={() => setIsPlaying(false)}
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-contain"
                     />
                   </div>
 
@@ -1205,7 +1205,7 @@ export const VideoTrimmerView: React.FC = () => {
                   onChange={(e) => setAspectFit(e.target.value as AspectFitMode)}
                   className="w-full p-2.5 bg-surface rounded-input border-2 border-text-primary text-xs text-text-primary focus:outline-none focus:border-accent font-bold shadow-neo-sm"
                 >
-                  <option value="mobile_9_16">📱 9:16 Vertical Shorts Crop</option>
+                  <option value="mobile_9_16">📱 9:16 Vertical Shorts Fit (Letterbox)</option>
                   <option value="original">🖥️ Widescreen 16:9 Original</option>
                   <option value="square_1_1">🔳 Square 1:1 Feed Post</option>
                 </select>
@@ -1956,7 +1956,7 @@ export const VideoTrimmerView: React.FC = () => {
                           {videoUrl ? (
                             <video
                               src={videoUrl}
-                              className="w-full h-full object-cover"
+                              className="w-full h-full object-contain"
                               controls
                               muted
                             />
@@ -2025,7 +2025,7 @@ export const VideoTrimmerView: React.FC = () => {
                           {bypassAfterUrl ? (
                             <video
                               src={bypassAfterUrl}
-                              className="w-full h-full object-cover"
+                              className="w-full h-full object-contain"
                               controls
                               autoPlay
                               muted
@@ -2035,7 +2035,7 @@ export const VideoTrimmerView: React.FC = () => {
                               <video
                                 src={videoUrl}
                                 style={liveSimulate ? (getSimulatedFilterStyle() as React.CSSProperties) : undefined}
-                                className="w-full h-full object-cover"
+                                className="w-full h-full object-contain"
                                 controls
                                 muted
                               />
