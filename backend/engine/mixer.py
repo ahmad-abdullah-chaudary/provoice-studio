@@ -44,7 +44,7 @@ class BackgroundMusicMixer:
         try:
             res = subprocess.run(
                 ["ffmpeg", "-y", "-i", wav_path, "-ar", "24000", "-ac", "1", "-f", "wav", tmp_path],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
             if res.returncode != 0 or not os.path.exists(tmp_path):
                 raise RuntimeError(f"ffmpeg could not decode {wav_path}")

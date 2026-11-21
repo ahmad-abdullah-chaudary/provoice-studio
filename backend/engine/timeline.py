@@ -31,7 +31,7 @@ class MultiTrackTimelineMixer:
             res = _sp.run(
                 ["ffmpeg", "-y", "-i", file_path,
                  "-ar", "24000", "-ac", "1", "-f", "wav", tmp.name],
-                stdout=_sp.PIPE, stderr=_sp.PIPE, timeout=60,
+                stdout=_sp.PIPE, stderr=_sp.PIPE,
             )
             if res.returncode == 0 and os.path.exists(tmp.name):
                 sr, data = wavfile.read(tmp.name)
@@ -110,7 +110,7 @@ class MultiTrackTimelineMixer:
                 ["ffmpeg", "-y", "-i", tmp_in.name,
                  "-filter:a", atempo,
                  "-ar", str(sr), "-ac", "1", "-f", "wav", tmp_out.name],
-                stdout=_sp.PIPE, stderr=_sp.PIPE, timeout=60,
+                stdout=_sp.PIPE, stderr=_sp.PIPE,
             )
             if res.returncode == 0 and os.path.exists(tmp_out.name):
                 from scipy.io.wavfile import read as wav_read

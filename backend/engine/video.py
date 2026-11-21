@@ -19,7 +19,7 @@ class VideoSyncEngine:
             output_wav_path,
         ]
         try:
-            res = subprocess.run(cmd, capture_output=True, timeout=120)
+            res = subprocess.run(cmd, capture_output=True)
             return res.returncode == 0 and os.path.exists(output_wav_path)
         except Exception as e:
             print(f"[VideoEngine] Extract audio error: {e}")
@@ -52,7 +52,7 @@ class VideoSyncEngine:
                 "-map", "0:v:0", "-map", "1:a:0", "-shortest", output_mp4_path,
             ]
         try:
-            res = subprocess.run(cmd, capture_output=True, timeout=300)
+            res = subprocess.run(cmd, capture_output=True)
             return res.returncode == 0 and os.path.exists(output_mp4_path)
         except Exception as e:
             print(f"[VideoEngine] Export video error: {e}")
@@ -183,7 +183,7 @@ class VideoSyncEngine:
 
         try:
             print(f"[VideoEngine] Rendering {len(valid)} marker(s) into {os.path.basename(output_mp4_path)} (burn_subtitles={burn_subtitles}, auto_ducking={auto_ducking})")
-            res = subprocess.run(cmd, capture_output=True, timeout=600)
+            res = subprocess.run(cmd, capture_output=True)
             if srt_file and os.path.exists(srt_file):
                 try: os.unlink(srt_file)
                 except Exception: pass
@@ -191,8 +191,6 @@ class VideoSyncEngine:
                 return True, ""
             err = res.stderr.decode("utf-8", errors="replace")
             return False, err[-600:] if len(err) > 600 else err
-        except subprocess.TimeoutExpired:
-            return False, "FFmpeg export timed out (>10 min)"
         except Exception as exc:
             return False, str(exc)
 
@@ -238,7 +236,7 @@ class VideoSyncEngine:
                  "-select_streams", "v:0",
                  "-show_entries", "stream=width,height",
                  "-of", "csv=p=0:s=x", video_path],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True,
             )
             if probe.returncode == 0 and "x" in probe.stdout.strip():
                 w, h = probe.stdout.strip().split("x")
@@ -356,7 +354,7 @@ class VideoSyncEngine:
                     clip_path,
                 ]
                 try:
-                    res = subprocess.run(cmd_copy, capture_output=True, timeout=15)
+                    res = subprocess.run(cmd_copy, capture_output=True)
                     if res.returncode == 0 and os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
                         success = True
                 except Exception:
@@ -384,7 +382,7 @@ class VideoSyncEngine:
                 if idx == 0:
                     print(f"[VideoEngine] FFmpeg encode cmd: {' '.join(cmd_encode)}")
                 try:
-                    res = subprocess.run(cmd_encode, capture_output=True, timeout=300)
+                    res = subprocess.run(cmd_encode, capture_output=True)
                     if res.returncode == 0 and os.path.exists(clip_path):
                         success = True
                     else:
@@ -401,7 +399,7 @@ class VideoSyncEngine:
                          "-select_streams", "v:0",
                          "-show_entries", "stream=width,height",
                          "-of", "csv=p=0:s=x", clip_path],
-                        capture_output=True, text=True, timeout=10,
+                        capture_output=True, text=True,
                     )
                     if probe.returncode == 0 and "x" in probe.stdout.strip():
                         out_w, out_h = probe.stdout.strip().split("x")
@@ -423,7 +421,7 @@ class VideoSyncEngine:
                                 "-movflags", "+faststart",
                                 clip_path,
                             ]
-                            fb_res = subprocess.run(cmd_fallback, capture_output=True, timeout=300)
+                            fb_res = subprocess.run(cmd_fallback, capture_output=True)
                             if fb_res.returncode == 0 and os.path.exists(clip_path):
                                 print(f"[VideoEngine] Clip {idx} re-encoded with pad fallback → {target_w}x{target_h}")
                             else:
@@ -507,7 +505,7 @@ class VideoSyncEngine:
                 "-i", concat_txt, "-c", "copy", combined_path,
             ]
             try:
-                res = subprocess.run(cmd_concat, capture_output=True, timeout=300)
+                res = subprocess.run(cmd_concat, capture_output=True)
                 if res.returncode == 0 and os.path.exists(combined_path):
                     combined_url = f"/api/exports/trimmed/{combined_name}"
             except Exception as e:
@@ -541,7 +539,7 @@ class VideoSyncEngine:
         ]
 
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            res = subprocess.run(cmd, capture_output=True, text=True)
             stderr = res.stderr or ""
         except Exception:
             return []
@@ -571,7 +569,7 @@ class VideoSyncEngine:
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 video_path
             ]
-            p_res = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+            p_res = subprocess.run(probe_cmd, capture_output=True, text=True)
             total_duration = float(p_res.stdout.strip())
         except Exception:
             pass
@@ -781,7 +779,7 @@ class VideoSyncEngine:
                 "-select_streams", "a:0",
                 "-show_entries", "stream=codec_type,sample_rate",
                 "-of", "csv=p=0", video_path
-            ], capture_output=True, text=True, timeout=10)
+            ], capture_output=True, text=True)
             probe_lines = probe.stdout.strip().split("\n")
             for line in probe_lines:
                 parts = line.strip().split(",")
@@ -864,11 +862,9 @@ class VideoSyncEngine:
         else:
             cmd += ["-movflags", "+faststart", out_path]
 
-        # Timeout: 120s for preview/clips, 3600s (1 hour) for full movie
-        timeout_sec = 120 if preview_duration > 0 else 3600
-
+        # No timeout: videos vary in length, so FFmpeg runs until completion
         try:
-            result = subprocess.run(cmd, capture_output=True, timeout=timeout_sec)
+            result = subprocess.run(cmd, capture_output=True)
             if result.returncode != 0 or not os.path.exists(bypass_out) or os.path.getsize(bypass_out) <= 100:
                 stderr = result.stderr.decode("utf-8", errors="replace")[-800:]
                 print(f"[VideoEngine] Bypass FFmpeg error:\n{stderr}")
@@ -888,7 +884,7 @@ class VideoSyncEngine:
                     "-threads", "0", "-c:a", "aac", "-ac", "2", "-b:a", "192k",
                     "-movflags", "+faststart", out_path,
                 ]
-                result2 = subprocess.run(cmd2, capture_output=True, timeout=timeout_sec)
+                result2 = subprocess.run(cmd2, capture_output=True)
                 # Clean up temp file
                 try:
                     os.remove(bypass_out)
@@ -908,8 +904,6 @@ class VideoSyncEngine:
                 }
             else:
                 return {"success": False, "error": "Output file is empty or missing"}
-        except subprocess.TimeoutExpired:
-            return {"success": False, "error": f"Processing timeout ({timeout_sec}s)"}
         except Exception as e:
             print(f"[VideoEngine] Bypass exception: {e}")
             return {"success": False, "error": str(e)}

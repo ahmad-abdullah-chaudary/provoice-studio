@@ -783,13 +783,6 @@ export const VideoTrimmerView: React.FC = () => {
         }
       }, 1000);
 
-      // Safety timeout: 30 minutes
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        if (trimTimerRef.current) clearInterval(trimTimerRef.current);
-        setIsTrimming(false);
-      }, 1800000);
-
     } catch {
       if (trimTimerRef.current) clearInterval(trimTimerRef.current);
       showToast('Backend offline — start the server first', 'error');
@@ -1746,12 +1739,6 @@ export const VideoTrimmerView: React.FC = () => {
                         } catch {
                           // Ignore brief network hiccups during poll
                         }
-
-                        if (seconds >= 120) {
-                          clearInterval(pollInterval);
-                          showToast('Preview timed out after 2 minutes. Try a lighter preset.', 'error');
-                          setIsBypassing(false);
-                        }
                       }, 1000);
 
                     } catch (err: unknown) {
@@ -1856,12 +1843,6 @@ export const VideoTrimmerView: React.FC = () => {
                           }
                         } catch {
                           // Ignore brief network hiccups during poll
-                        }
-
-                        if (seconds >= 3600) {
-                          clearInterval(pollInterval);
-                          showToast('Full render reached 1-hour limit. Check output directory.', 'info');
-                          setIsBypassing(false);
                         }
                       }, 1000);
 
